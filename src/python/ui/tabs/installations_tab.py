@@ -1,11 +1,12 @@
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QComboBox, QListWidget, QListWidgetItem, QSizePolicy, QDialog, QDialogButtonBox, QMessageBox, QMenu, QTabWidget, QCheckBox, QScrollArea, QFrame, QGridLayout, QGraphicsDropShadowEffect, QProgressBar
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QComboBox, QListWidget, QListWidgetItem, QSizePolicy, QDialog, QDialogButtonBox, QMessageBox, QMenu, QTabWidget, QCheckBox, QScrollArea, QFrame, QGridLayout, QGraphicsDropShadowEffect, QProgressBar, QButtonGroup, QStackedWidget
 )
-from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve, QTimer
+from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve, QTimer, QObject
 from PySide6.QtGui import QIcon
 import os
 import json
 import urllib.request
+import threading
 
 # Заглушки для тестовых данных
 
@@ -153,120 +154,276 @@ class InstalledVersionWidget(QWidget):
         if reply == QMessageBox.StandardButton.Yes:
             self.remove_requested.emit(self.version)
 
+class LoaderUpdater(QObject):
+    update = Signal(list)
+
 class InstallationsTab(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, minecraft_manager, parent=None):
         super().__init__(parent)
-        self.installed_versions = []
+        self.minecraft_manager = minecraft_manager
         self.setup_ui()
 
     def setup_ui(self):
         main_layout = QVBoxLayout(self)
-        self.tabs = QTabWidget()
-        main_layout.addWidget(self.tabs)
-        # Вкладка "Установлено"
-        self.installed_tab = QWidget()
-        self.setup_installed_tab()
-        self.tabs.addTab(self.installed_tab, "Установлено")
-        # Вкладка "Новая установка"
-        self.new_tab = QWidget()
-        self.setup_new_tab()
-        self.tabs.addTab(self.new_tab, "Новая установка")
-
-    def setup_installed_tab(self):
-        layout = QVBoxLayout(self.installed_tab)
-        self.installed_list = QListWidget()
-        for v in self.installed_versions:
-            item = QListWidgetItem()
-            widget = InstalledVersionWidget(v, parent=self.installed_list)
-            widget.remove_requested.connect(self.remove_version)
-            item.setSizeHint(widget.sizeHint())
-            self.installed_list.addItem(item)
-            self.installed_list.setItemWidget(item, widget)
-        layout.addWidget(self.installed_list)
-        self.installed_list.setStyleSheet("QListWidget::item { border-bottom: 1px solid #eee; }")
-
-    def setup_new_tab(self):
-        layout = QVBoxLayout(self.new_tab)
-        # Фильтры
-        filter_layout = QHBoxLayout()
-        self.filter_checkboxes = {}
-        for t in VERSION_TYPES:
-            cb = QCheckBox(TYPE_LABELS[t])
-            cb.setChecked(t == "release")
-            cb.stateChanged.connect(self.update_cards)
-            self.filter_checkboxes[t] = cb
-            filter_layout.addWidget(cb)
-        layout.addLayout(filter_layout)
-        # Поиск
-        search_layout = QHBoxLayout()
-        self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("Поиск по названию...")
-        self.search_edit.textChanged.connect(self.update_cards)
-        search_layout.addWidget(self.search_edit)
-        layout.addLayout(search_layout)
-        # Прокручиваемая область с карточками
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(True)
-        self.cards_container = QWidget()
-        self.cards_layout = QGridLayout(self.cards_container)
-        self.scroll_area.setWidget(self.cards_container)
-        layout.addWidget(self.scroll_area)
-        self.update_cards()
-
-    def load_official_versions(self):
-        try:
-            with urllib.request.urlopen(MOJANG_MANIFEST_URL, timeout=5) as resp:
-                data = json.loads(resp.read().decode())
-            versions = []
-            for v in data["versions"]:
-                versions.append({
-                    "name": v["id"],
-                    "type": v["type"],
-                    "date": v.get("releaseTime", "")[:10]
-                })
-            return versions
-        except Exception as e:
-            print(f"[WARN] Не удалось загрузить список версий Mojang: {e}")
-            return []
-
-    def update_cards(self):
-        # Определяем активные фильтры
-        active_types = [t for t, cb in self.filter_checkboxes.items() if cb.isChecked()]
-        if not active_types:
-            # Всегда хотя бы один фильтр активен
-            self.filter_checkboxes["release"].setChecked(True)
-            active_types = ["release"]
-        search = self.search_edit.text().lower()
-        # Очищаем старые карточки
-        for i in reversed(range(self.cards_layout.count())):
-            item = self.cards_layout.itemAt(i)
-            if item is not None:
-                w = item.widget()
-                if w:
-                    w.setParent(None)
-        # Добавляем карточки
-        row, col = 0, 0
-        for v in self.load_official_versions():
-            if v["type"] not in active_types:
-                continue
-            if search and search not in v["name"].lower():
-                continue
-            installed = any(inst["name"] == v["name"] for inst in self.installed_versions)
-            card = VersionCard(v, installed=installed)
-            card.installed_signal.connect(self.on_version_installed)
-            self.cards_layout.addWidget(card, row, col)
-            col += 1
-            if col >= 2:
-                col = 0
-                row += 1
-
-    def on_version_installed(self, version):
-        if not any(v["name"] == version["name"] for v in self.installed_versions):
-            self.installed_versions.append({"name": version["name"], "type": version["type"], "status": "Установлено"})
-        self.setup_installed_tab()
-        self.update_cards()
-
-    def remove_version(self, version):
-        self.installed_versions = [v for v in self.installed_versions if v["name"] != version["name"]]
-        self.setup_installed_tab()
-        self.update_cards() 
+        self.setStyleSheet("background: #f5f5f5; color: #111;")
+        # Кастомные вкладки-кнопки
+        tabs_layout = QHBoxLayout()
+        self.tab_btns = []
+        self.btn_my = QPushButton("Мои сборки")
+        self.btn_create = QPushButton("Создать сборку")
+        self.btn_ready = QPushButton("Готовые сборки")
+        for btn in [self.btn_my, self.btn_create, self.btn_ready]:
+            btn.setCheckable(True)
+            btn.setStyleSheet("font-size: 17px; padding: 10px 32px; border: 2px solid #bbb; border-radius: 8px; background: #fff; color: #222; font-weight: bold;")
+            tabs_layout.addWidget(btn)
+            self.tab_btns.append(btn)
+        tabs_layout.addStretch()
+        main_layout.addLayout(tabs_layout)
+        self.btn_group = QButtonGroup(self)
+        self.btn_group.setExclusive(True)
+        for btn in self.tab_btns:
+            self.btn_group.addButton(btn)
+        # Контейнер для контента вкладок
+        self.tabs_content = QStackedWidget()
+        main_layout.addWidget(self.tabs_content)
+        # Вкладка 'Мои сборки'
+        self.my_builds_tab = QWidget()
+        self.tabs_content.addWidget(self.my_builds_tab)
+        # Вкладка 'Создать сборку'
+        self.create_tab = QWidget()
+        form_outer = QVBoxLayout(self.create_tab)
+        form_outer.setContentsMargins(24, 24, 24, 24)
+        form_outer.setSpacing(18)
+        form_outer.setAlignment(Qt.AlignmentFlag.AlignBottom)
+        # Darker background for the tab
+        self.create_tab.setStyleSheet("background: #23272e;")
+        top_layout = QHBoxLayout()
+        # Icon: square, height = height of 4 fields
+        icon = QLabel("Иконка")
+        icon_size = 4 * 48 + 3 * 14  # 4 поля по 48px + 3 отступа по 14px (как fields_layout.setSpacing)
+        icon.setFixedSize(icon_size, icon_size)
+        icon.setStyleSheet(f"background: #2d313a; border: 2.5px solid #444; border-radius: 24px; font-size: 20px; color: #888; qproperty-alignment: AlignCenter;")
+        top_layout.addWidget(icon)
+        fields_layout = QVBoxLayout()
+        fields_layout.setSpacing(14)
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("Название сборки")
+        self.name_edit.setStyleSheet("font-size: 16px; padding: 10px; border-radius: 12px; border: 2px solid #444; background: #23272e; color: #eee;")
+        fields_layout.addWidget(self.name_edit)
+        self.version_combo = QComboBox()
+        # Получаем все релизные версии через менеджер
+        all_versions = self.minecraft_manager.get_available_versions()
+        release_versions = [v["id"] for v in all_versions if v["type"] == "release"]
+        self.version_combo.addItems(release_versions)
+        # --- Кастомный стиль для QComboBox со своей SVG-стрелкой ---
+        combo_style = """
+        QComboBox {
+            background: #23272e;
+            border: 2px solid #444;
+            border-radius: 12px;
+            color: #eee;
+            font-size: 16px;
+            padding: 10px;
+        }
+        QComboBox::drop-down {
+            border: none;
+            background: transparent;
+            width: 28px;
+        }
+        QComboBox::down-arrow {
+            image: url(src/python/ui/icons/arrow_down.svg);
+            width: 16px;
+            height: 16px;
+            margin-right: 16px;
+            background: transparent;
+        }
+        QComboBox QAbstractItemView {
+            background: #23272e;
+            color: #eee;
+            border: 2px solid #444;
+            selection-background-color: #333a44;
+            selection-color: #fff;
+            outline: 0;
+        }
+        QComboBox QAbstractItemView QScrollBar:vertical {
+            background: #23272e;
+            width: 14px;
+            margin: 2px 2px 2px 2px;
+            border-radius: 7px;
+        }
+        QComboBox QAbstractItemView QScrollBar::handle:vertical {
+            background: #444;
+            min-height: 24px;
+            border-radius: 4px;
+            margin: 2px 3px 2px 3px;
+        }
+        QComboBox QAbstractItemView QScrollBar::add-line:vertical,
+        QComboBox QAbstractItemView QScrollBar::sub-line:vertical {
+            height: 0px;
+            background: none;
+            border: none;
+        }
+        QComboBox QAbstractItemView QScrollBar::add-page:vertical,
+        QComboBox QAbstractItemView QScrollBar::sub-page:vertical {
+            background: none;
+        }
+        """
+        self.version_combo.setStyleSheet(combo_style)
+        self.loader_combo = QComboBox()
+        self.loader_combo.addItems(["Vanilla", "Fabric", "Forge", "NeoForge", "Quilt"])
+        self.loader_combo.setStyleSheet(combo_style)
+        self.loader_ver_combo = QComboBox()
+        self.loader_ver_combo.addItems(["0.14.21", "0.14.20", "0.14.19"])
+        self.loader_ver_combo.setStyleSheet(combo_style)
+        fields_layout.addWidget(self.version_combo)
+        fields_layout.addWidget(self.loader_combo)
+        fields_layout.addWidget(self.loader_ver_combo)
+        top_layout.addLayout(fields_layout)
+        form_outer.addLayout(top_layout)
+        form_outer.addStretch()
+        # Button and progress bar at the bottom
+        create_btn = QPushButton("Создать сборку")
+        create_btn.setStyleSheet("background: #2196F3; color: #fff; font-weight: bold; border-radius: 14px; padding: 16px 0; font-size: 18px;")
+        create_btn.setMinimumHeight(48)
+        form_outer.addWidget(create_btn)
+        progress = QProgressBar()
+        progress.setValue(0)
+        progress.setStyleSheet("height: 26px; border-radius: 14px; border: 2.5px solid #222; background: #23272e; color: #23272e; font-size: 16px;")
+        progress.setTextVisible(False)
+        form_outer.addWidget(progress)
+        self.tabs_content.addWidget(self.create_tab)
+        # Вкладка 'Готовые сборки' (заглушка)
+        self.ready_tab = QWidget()
+        ready_layout = QVBoxLayout(self.ready_tab)
+        ready_layout.addWidget(QLabel("Готовые сборки (скоро)", alignment=Qt.AlignmentFlag.AlignCenter))
+        self.tabs_content.addWidget(self.ready_tab)
+        # Логика переключения вкладок
+        self.btn_my.clicked.connect(lambda: self.tabs_content.setCurrentWidget(self.my_builds_tab))
+        self.btn_create.clicked.connect(lambda: self.tabs_content.setCurrentWidget(self.create_tab))
+        self.btn_ready.clicked.connect(lambda: self.tabs_content.setCurrentWidget(self.ready_tab))
+        self.btn_my.setChecked(True)
+        self.tabs_content.setCurrentWidget(self.my_builds_tab)
+        # Стилизация активной вкладки
+        for btn in self.tab_btns:
+            btn.toggled.connect(lambda checked, b=btn: b.setStyleSheet(
+                "font-size: 17px; padding: 10px 32px; border: 2px solid #2196F3; border-radius: 8px; background: #e3f2fd; color: #222; font-weight: bold;" if checked else
+                "font-size: 17px; padding: 10px 32px; border: 2px solid #bbb; border-radius: 8px; background: #fff; color: #222; font-weight: bold;"
+            ))
+        # Обработка смены лоадера
+        loader_updater = LoaderUpdater()
+        def update_loader_versions(versions):
+            self.loader_ver_combo.clear()
+            if versions:
+                self.loader_ver_combo.addItems(versions)
+            else:
+                self.loader_ver_combo.addItem('Версии не найдены')
+            update_build_name()
+        loader_updater.update.connect(update_loader_versions)
+        def on_loader_changed(text):
+            if text == "Vanilla":
+                self.loader_ver_combo.clear()
+                self.loader_ver_combo.setVisible(False)
+                update_build_name()
+            elif text == "Fabric":
+                self.loader_ver_combo.clear()
+                self.loader_ver_combo.setVisible(True)
+                mc_version = self.version_combo.currentText()
+                def fetch_fabric_versions():
+                    versions = self.minecraft_manager.get_fabric_loader_versions(mc_version)
+                    loader_updater.update.emit(versions)
+                    update_build_name()
+                threading.Thread(target=fetch_fabric_versions).start() if mc_version else None
+            elif text == "Forge":
+                self.loader_ver_combo.clear()
+                self.loader_ver_combo.setVisible(True)
+                mc_version = self.version_combo.currentText()
+                def fetch_forge_versions():
+                    versions = self.minecraft_manager.get_forge_loader_versions(mc_version)
+                    loader_updater.update.emit(versions)
+                    update_build_name()
+                threading.Thread(target=fetch_forge_versions).start() if mc_version else None
+            elif text == "Quilt":
+                self.loader_ver_combo.clear()
+                self.loader_ver_combo.setVisible(True)
+                mc_version = self.version_combo.currentText()
+                def fetch_quilt_versions():
+                    versions = self.minecraft_manager.get_quilt_loader_versions(mc_version)
+                    loader_updater.update.emit(versions)
+                    update_build_name()
+                threading.Thread(target=fetch_quilt_versions).start() if mc_version else None
+            elif text == "NeoForge":
+                self.loader_ver_combo.clear()
+                self.loader_ver_combo.setVisible(True)
+                mc_version = self.version_combo.currentText()
+                def fetch_neoforge_versions():
+                    versions = self.minecraft_manager.get_neoforge_loader_versions(mc_version)
+                    loader_updater.update.emit(versions)
+                    update_build_name()
+                threading.Thread(target=fetch_neoforge_versions).start() if mc_version else None
+            elif text == "Paper":
+                self.loader_ver_combo.clear()
+                self.loader_ver_combo.setVisible(True)
+                mc_version = self.version_combo.currentText()
+                def fetch_paper_versions():
+                    versions = self.minecraft_manager.get_paper_versions(mc_version)
+                    loader_updater.update.emit(versions)
+                    update_build_name()
+                threading.Thread(target=fetch_paper_versions).start() if mc_version else None
+                self.loader_combo.setToolTip("Paper — только для серверов. Нельзя запускать моды, только плагины!")
+            elif text == "Purpur":
+                self.loader_ver_combo.clear()
+                self.loader_ver_combo.setVisible(True)
+                mc_version = self.version_combo.currentText()
+                def fetch_purpur_versions():
+                    versions = self.minecraft_manager.get_purpur_versions(mc_version)
+                    loader_updater.update.emit(versions)
+                    update_build_name()
+                threading.Thread(target=fetch_purpur_versions).start() if mc_version else None
+                self.loader_combo.setToolTip("Purpur — только для серверов. Нельзя запускать моды, только плагины!")
+            else:
+                self.loader_ver_combo.clear()
+                self.loader_ver_combo.addItems(["0.14.21", "0.14.20", "0.14.19"])
+                self.loader_ver_combo.setVisible(True)
+                update_build_name()
+        self.loader_combo.currentTextChanged.connect(on_loader_changed)
+        # При смене версии Minecraft, если выбран Fabric, обновлять список версий лоадера
+        def on_mc_version_changed():
+            on_loader_changed(self.loader_combo.currentText())
+        self.version_combo.currentTextChanged.connect(lambda _: on_mc_version_changed())
+        # Всплывающая подсказка при наведении на Paper/Purpur
+        def show_loader_tooltip(index):
+            text = self.loader_combo.itemText(index)
+            if text == "Paper":
+                self.loader_combo.setToolTip("Paper — только для серверов. Нельзя запускать моды, только плагины!")
+            elif text == "Purpur":
+                self.loader_combo.setToolTip("Purpur — только для серверов. Нельзя запускать моды, только плагины!")
+            else:
+                self.loader_combo.setToolTip("")
+        self.loader_combo.highlighted.connect(show_loader_tooltip)
+        
+        # Автоматическое формирование названия сборки
+        def update_build_name():
+            mc_version = self.version_combo.currentText()
+            loader = self.loader_combo.currentText()
+            
+            if not mc_version:
+                return
+            
+            if loader == "Vanilla":
+                build_name = f"Minecraft {mc_version}"
+            else:
+                build_name = f"Minecraft {mc_version} with {loader}"
+            
+            self.name_edit.setText(build_name)
+        
+        # Подключаем обновление названия к изменениям в комбобоксах
+        self.version_combo.currentTextChanged.connect(lambda _: update_build_name())
+        self.loader_combo.currentTextChanged.connect(lambda _: update_build_name())
+        self.loader_ver_combo.currentTextChanged.connect(lambda _: update_build_name())
+        
+        # Скрыть loader_ver_combo при инициализации, если выбран Vanilla
+        if self.loader_combo.currentText() == "Vanilla":
+            self.loader_ver_combo.setVisible(False)
+        # Инициализируем название при загрузке
+        if self.version_combo.count() > 0:
+            update_build_name() 

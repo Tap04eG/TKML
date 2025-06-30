@@ -47,6 +47,86 @@ class TMKLLauncher:
         font = QFont("Segoe UI", 9)
         self.app.setFont(font)
         
+        # Применяем стиль
+        self.app.setStyleSheet("""
+    QWidget {
+        background-color: #2d2d2d;
+        color: #e0e0e0;
+        font-family: 'Segoe UI', Arial, sans-serif;
+        font-size: 12pt;
+    }
+    QPushButton {
+        background-color: #3a3a3a;
+        border: 1px solid #4a4a4a;
+        border-radius: 5px;
+        padding: 8px 16px;
+        min-width: 80px;
+    }
+    QPushButton:hover {
+        background-color: #4a4a4a;
+    }
+    QPushButton:pressed {
+        background-color: #2a2a2a;
+    }
+    QPushButton.primary {
+        background-color: #2ecc71;
+        color: #ffffff;
+        font-weight: bold;
+    }
+    QPushButton.primary:hover {
+        background-color: #27ae60;
+    }
+    QPushButton.primary:pressed {
+        background-color: #219653;
+    }
+    QLineEdit, QTextEdit, QPlainTextEdit {
+        background-color: #3a3a3a;
+        border: 1px solid #4a4a4a;
+        border-radius: 4px;
+        padding: 6px;
+        selection-background-color: #2ecc71;
+    }
+    QCheckBox, QRadioButton {
+        spacing: 8px;
+    }
+    QCheckBox::indicator, QRadioButton::indicator {
+        width: 16px;
+        height: 16px;
+    }
+    QCheckBox::indicator:checked {
+        background-color: #2ecc71;
+        border: 1px solid #27ae60;
+    }
+    QScrollBar:vertical {
+        border: none;
+        background: #3a3a3a;
+        width: 10px;
+    }
+    QScrollBar::handle:vertical {
+        background: #4a4a4a;
+        min-height: 20px;
+    }
+    QScrollBar::handle:vertical:hover {
+        background: #5a5a5a;
+    }
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+        height: 0px;
+    }
+    QTabWidget::pane {
+        border: 1px solid #4a4a4a;
+    }
+    QTabBar::tab {
+        background: #3a3a3a;
+        color: #e0e0e0;
+        padding: 8px 12px;
+        border: none;
+    }
+    QTabBar::tab:selected {
+        background: #2ecc71;
+        color: #ffffff;
+    }
+""")
+        
     def setup_managers(self):
         """Инициализация менеджеров"""
         # Настраиваем логирование
