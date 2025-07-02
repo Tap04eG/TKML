@@ -42,7 +42,14 @@ class ConfigManager:
             "window_height": 800,
             "auto_update": True,
             "check_servers": True,
-            "download_threads": 4
+            "download_threads": 4,
+            "instances_path": "instances",  # Папка для сборок
+            "versions_path": "versions",    # Папка для версий
+            "libraries_path": "libraries",  # Папка для библиотек
+            "assets_path": "assets",        # Папка для ресурсов
+            "logs_path": "logs",            # Папка для логов
+            "config_path": "config",        # Папка для конфигурации
+            "temp_path": "temp"             # Папка для временных файлов
         }
         
         if self.config_file.exists():
@@ -130,4 +137,36 @@ class ConfigManager:
         """Установка активного профиля"""
         self.profiles["active_profile"] = profile_name
         self.save_profiles()
-        logger.info(f"Активный профиль установлен: {profile_name}") 
+        logger.info(f"Активный профиль установлен: {profile_name}")
+    
+    def get_minecraft_path(self) -> Path:
+        """Получение пути к папке Minecraft"""
+        return Path(self.get("minecraft_path"))
+    
+    def get_instances_path(self) -> Path:
+        """Получение пути к папке сборок"""
+        return self.get_minecraft_path() / self.get("instances_path", "instances")
+    
+    def get_versions_path(self) -> Path:
+        """Получение пути к папке версий"""
+        return self.get_minecraft_path() / self.get("versions_path", "versions")
+    
+    def get_libraries_path(self) -> Path:
+        """Получение пути к папке библиотек"""
+        return self.get_minecraft_path() / self.get("libraries_path", "libraries")
+    
+    def get_assets_path(self) -> Path:
+        """Получение пути к папке ресурсов"""
+        return self.get_minecraft_path() / self.get("assets_path", "assets")
+    
+    def get_logs_path(self) -> Path:
+        """Получение пути к папке логов"""
+        return self.get_minecraft_path() / self.get("logs_path", "logs")
+    
+    def get_config_path(self) -> Path:
+        """Получение пути к папке конфигурации"""
+        return self.get_minecraft_path() / self.get("config_path", "config")
+    
+    def get_temp_path(self) -> Path:
+        """Получение пути к папке временных файлов"""
+        return self.get_minecraft_path() / self.get("temp_path", "temp") 

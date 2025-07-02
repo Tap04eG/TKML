@@ -10,6 +10,11 @@ from pathlib import Path
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt, QTranslator, QLocale
 from PySide6.QtGui import QIcon, QFont
+from loguru import logger
+import datetime
+
+# Добавляем вывод в консоль
+# logger.add(sys.stdout, level="DEBUG", colorize=True, format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>")
 
 # Добавляем путь к модулям проекта
 sys.path.append(str(Path(__file__).parent))
@@ -19,6 +24,13 @@ from core.config_manager import ConfigManager
 from core.logger import setup_logger
 from utils.theme_manager import ThemeManager
 
+def handle_exception(exc_type, exc_value, exc_traceback):
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    logger.exception("Необработанное исключение:", exc_info=(exc_type, exc_value, exc_traceback))
+
+sys.excepthook = handle_exception
 
 class TMKLLauncher:
     """Главный класс лаунчера TMKL"""
@@ -129,12 +141,10 @@ class TMKLLauncher:
         
     def setup_managers(self):
         """Инициализация менеджеров"""
-        # Настраиваем логирование
-        setup_logger()
-        
         # Инициализируем менеджер конфигурации
         self.config_manager = ConfigManager()
-        
+        # Настраиваем логирование с путём к Minecraft
+        setup_logger(self.config_manager.get("minecraft_path"))
         # Инициализируем менеджер тем
         self.theme_manager = ThemeManager(self.config_manager)
         

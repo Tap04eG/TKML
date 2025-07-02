@@ -3,13 +3,15 @@
 Основной интерфейс приложения
 """
 
-from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QPushButton, QLabel, QMessageBox, QSizePolicy, QFrame, QStackedWidget, QGridLayout
+from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QPushButton, QLabel, QMessageBox, QSizePolicy, QFrame, QStackedWidget, QGridLayout, QDialog
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from loguru import logger
-from ui.tabs.profiles_tab import ProfilesTab, get_avatar_pixmap
+from .tabs.profiles_tab import ProfilesTab, get_avatar_pixmap
 from ui.tabs.installations_tab import InstallationsTab
 from core.minecraft_manager import MinecraftManager
+from core.build_manager import BuildManager
+from ui.tabs.settings_tab import SettingsTab
 
 
 class ProfileWidget(QFrame):
@@ -129,6 +131,7 @@ class MainWindow(QMainWindow):
         """Настройка пользовательского интерфейса"""
         # Центральный виджет
         central_widget = QWidget()
+        central_widget.setStyleSheet("background: #23272e; border-radius: 24px; border: none;")
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
         # Боковое меню
@@ -171,9 +174,12 @@ class MainWindow(QMainWindow):
         self.page_home = QWidget()  # Пустая главная
         # Создаём менеджер версий Minecraft
         minecraft_manager = MinecraftManager(self.config_manager)
-        self.installations_tab = InstallationsTab(minecraft_manager)
+        build_manager = BuildManager(self.config_manager, minecraft_manager)
+        self.installations_tab = InstallationsTab(build_manager, minecraft_manager)
+        self.settings_tab = SettingsTab(self.config_manager, build_manager)
         self.stack.addWidget(self.page_home)
         self.stack.addWidget(self.installations_tab)
+        self.stack.addWidget(self.settings_tab)
         content_layout.addWidget(self.stack)
         # Итоговая сборка
         main_layout.addWidget(sidebar_widget)
@@ -181,6 +187,7 @@ class MainWindow(QMainWindow):
         # Сигналы для переключения страниц
         self.home_btn.clicked.connect(lambda: self.stack.setCurrentWidget(self.page_home))
         self.install_btn.clicked.connect(lambda: self.stack.setCurrentWidget(self.installations_tab))
+        self.settings_btn.clicked.connect(lambda: self.stack.setCurrentWidget(self.settings_tab))
 
     def update_play_button(self):
         """Включает или выключает кнопку 'ИГРАТЬ' в зависимости от наличия профиля"""
@@ -209,4 +216,4 @@ class MainWindow(QMainWindow):
         self.theme_manager.toggle_theme(app)
 
     def goto_profiles(self):
-        self.stack.setCurrentWidget(self.page_home) 
+        self.stack.setCurrentWidget(self.page_home)
