@@ -6,7 +6,6 @@
 from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QPushButton, QLabel, QMessageBox, QSizePolicy, QFrame, QStackedWidget, QGridLayout, QDialog
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
-from loguru import logger
 from .tabs.profiles_tab import ProfilesTab, get_avatar_pixmap
 from ui.tabs.installations_tab import InstallationsTab
 from core.minecraft_manager import MinecraftManager
@@ -124,8 +123,6 @@ class MainWindow(QMainWindow):
         
         # Создание интерфейса
         self.setup_ui()
-        
-        logger.info("Главное окно инициализировано")
     
     def setup_ui(self):
         """Настройка пользовательского интерфейса"""

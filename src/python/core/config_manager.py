@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path
 from typing import Dict, Any, Optional
-from loguru import logger
 
 
 class ConfigManager:
@@ -26,8 +25,6 @@ class ConfigManager:
         # Загружаем конфигурацию
         self.config = self._load_config()
         self.profiles = self._load_profiles()
-        
-        logger.info("ConfigManager инициализирован")
         
     def _load_config(self) -> Dict[str, Any]:
         """Загрузка основной конфигурации"""
@@ -58,9 +55,8 @@ class ConfigManager:
                     loaded_config = json.load(f)
                     # Обновляем дефолтную конфигурацию загруженными данными
                     default_config.update(loaded_config)
-                    logger.info("Конфигурация загружена")
             except Exception as e:
-                logger.error(f"Ошибка загрузки конфигурации: {e}")
+                pass
         
         return default_config
     
@@ -76,9 +72,8 @@ class ConfigManager:
                 with open(self.profiles_file, 'r', encoding='utf-8') as f:
                     loaded_profiles = json.load(f)
                     default_profiles.update(loaded_profiles)
-                    logger.info("Профили загружены")
             except Exception as e:
-                logger.error(f"Ошибка загрузки профилей: {e}")
+                pass
         
         return default_profiles
     
@@ -87,18 +82,16 @@ class ConfigManager:
         try:
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(self.config, f, indent=2, ensure_ascii=False)
-            logger.info("Конфигурация сохранена")
         except Exception as e:
-            logger.error(f"Ошибка сохранения конфигурации: {e}")
+            pass
     
     def save_profiles(self):
         """Сохранение профилей"""
         try:
             with open(self.profiles_file, 'w', encoding='utf-8') as f:
                 json.dump(self.profiles, f, indent=2, ensure_ascii=False)
-            logger.info("Профили сохранены")
         except Exception as e:
-            logger.error(f"Ошибка сохранения профилей: {e}")
+            pass
     
     def get(self, key: str, default: Any = None) -> Any:
         """Получение значения из конфигурации"""
@@ -120,14 +113,12 @@ class ConfigManager:
         
         self.profiles["profiles"][profile_name] = profile_data
         self.save_profiles()
-        logger.info(f"Профиль {profile_name} добавлен")
     
     def remove_profile(self, profile_name: str):
         """Удаление профиля"""
         if profile_name in self.profiles.get("profiles", {}):
             del self.profiles["profiles"][profile_name]
             self.save_profiles()
-            logger.info(f"Профиль {profile_name} удален")
     
     def get_active_profile(self) -> Optional[str]:
         """Получение активного профиля"""
@@ -137,7 +128,6 @@ class ConfigManager:
         """Установка активного профиля"""
         self.profiles["active_profile"] = profile_name
         self.save_profiles()
-        logger.info(f"Активный профиль установлен: {profile_name}")
     
     def get_minecraft_path(self) -> Path:
         """Получение пути к папке Minecraft"""

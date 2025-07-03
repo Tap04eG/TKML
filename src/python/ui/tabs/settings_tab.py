@@ -6,7 +6,8 @@ import os
 import subprocess
 import json
 import glob
-from PySide6.QtGui import QTextCursor
+from PySide6.QtGui import QTextCursor, QGuiApplication
+from loguru import logger
 
 class SettingsTab(QWidget):
     def __init__(self, config_manager, build_manager, parent=None):
@@ -24,42 +25,27 @@ class SettingsTab(QWidget):
         self.choose_btn = QPushButton("Изменить папку Minecraft")
         self.choose_btn.clicked.connect(self.choose_path)
         path_layout.addWidget(self.choose_btn)
-        path_layout.addStretch()
         self.tabs.addTab(self.path_tab, "Путь к Minecraft")
         # Вкладка логов
         self.logs_tab = QWidget()
         logs_layout = QVBoxLayout(self.logs_tab)
-        filter_layout = QHBoxLayout()
-        self.level_combo = QComboBox()
-        self.level_combo.addItems(["ALL", "INFO", "WARNING", "ERROR"])
-        self.level_combo.currentTextChanged.connect(self.update_log_view)
-        filter_layout.addWidget(QLabel("Уровень:"))
-        filter_layout.addWidget(self.level_combo)
-        self.event_combo = QComboBox()
-        self.event_combo.addItems(["ALL", "download_file", "download_file_attempt", "download_file_error"])
-        self.event_combo.currentTextChanged.connect(self.update_log_view)
-        filter_layout.addWidget(QLabel("Событие:"))
-        filter_layout.addWidget(self.event_combo)
-        self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("Поиск по логам...")
-        self.search_edit.textChanged.connect(self.update_log_view)
-        filter_layout.addWidget(self.search_edit)
-        logs_layout.addLayout(filter_layout)
-        self.log_content = QTextEdit()
-        self.log_content.setReadOnly(True)
-        logs_layout.addWidget(self.log_content)
-        btns_layout = QHBoxLayout()
-        self.copy_btn = QPushButton("Копировать лог")
-        self.copy_btn.clicked.connect(self.copy_log)
-        btns_layout.addWidget(self.copy_btn)
-        self.open_folder_btn = QPushButton("Открыть папку")
-        self.open_folder_btn.clicked.connect(self.open_log_folder)
-        btns_layout.addWidget(self.open_folder_btn)
-        logs_layout.addLayout(btns_layout)
-        self.tabs.addTab(self.logs_tab, "Логи приложения")
-        self.tabs.currentChanged.connect(self._on_tab_changed)
-        self.log_file = self._get_latest_log_file()
-        self._setup_auto_update()
+        self.log_view = QTextEdit()
+        self.log_view.setReadOnly(True)
+        logs_layout.addWidget(self.log_view)
+        log_btns_layout = QHBoxLayout()
+        self.btn_open_log2 = QPushButton("Открыть лог")
+        self.btn_copy_log2 = QPushButton("Скопировать логи")
+        self.btn_open_log2.clicked.connect(self.open_log_file)
+        self.btn_copy_log2.clicked.connect(self.copy_log_file)
+        log_btns_layout.addWidget(self.btn_open_log2)
+        log_btns_layout.addWidget(self.btn_copy_log2)
+        log_btns_layout.addStretch()
+        logs_layout.addLayout(log_btns_layout)
+        self.tabs.addTab(self.logs_tab, "Логи")
+        # Таймер для автообновления логов
+        self.log_timer = QTimer(self)
+        self.log_timer.timeout.connect(self.update_log_view)
+        self.log_timer.start(2000)
 
     def choose_path(self):
         current_path = str(self.config_manager.get('minecraft_path'))
@@ -88,62 +74,32 @@ class SettingsTab(QWidget):
         self.path_label.setText(f"Папка Minecraft: {new_path}")
         QMessageBox.information(self, "Готово", "Путь к папке Minecraft изменён. Перезапустите приложение для применения изменений.")
 
-    def _on_tab_changed(self, idx):
-        if self.tabs.tabText(idx) == "Логи приложения":
-            self.update_log_view()
+    def open_log_file(self):
+        log_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../logs/launcher.log'))
+        logger.info(f"[UI] Открытие файла лога: {log_path}")
+        try:
+            os.startfile(log_path)
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось открыть лог: {e}")
 
-    def _get_latest_log_file(self):
-        log_dir = (Path(__file__).parent.parent.parent / ".." / "logs").resolve()
-        files = sorted(glob.glob(str(log_dir / "launcher_*.jsonl")), reverse=True)
-        return files[0] if files else None
-
-    def _setup_auto_update(self):
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_log_view)
-        self.timer.start(1500)
+    def copy_log_file(self):
+        log_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../logs/launcher.log'))
+        logger.info(f"[UI] Копирование содержимого лога в буфер обмена: {log_path}")
+        try:
+            with open(log_path, 'r', encoding='utf-8') as f:
+                log_text = f.read()
+            clipboard = QGuiApplication.clipboard()
+            clipboard.setText(log_text)
+            QMessageBox.information(self, "Логи скопированы", "Содержимое лога скопировано в буфер обмена.")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось скопировать лог: {e}")
 
     def update_log_view(self):
-        if not self.log_file or not Path(self.log_file).exists():
-            self.log_content.setPlainText("Лог-файл не найден.")
-            return
-        level = self.level_combo.currentText()
-        event = self.event_combo.currentText()
-        query = self.search_edit.text().lower()
-        lines = []
-        html_lines = []
-        with open(self.log_file, "r", encoding="utf-8") as f:
-            for line in f:
-                try:
-                    entry = json.loads(line)
-                    lvl = entry.get("level", "").upper()
-                    evt = entry.get("event", "")
-                    msg = entry.get("message") or entry.get("msg") or ""
-                    if (level == "ALL" or lvl == level) and (event == "ALL" or evt == event) and (query in msg.lower()):
-                        color = "#ffffff"
-                        if evt == "download_file":
-                            color = "#4caf50"  # green
-                        elif evt == "download_file_attempt":
-                            color = "#2196f3"  # blue
-                        elif evt == "download_file_error" or lvl == "ERROR":
-                            color = "#f44336"  # red
-                        html_lines.append(f'<span style="color:{color}">[{entry.get("time", "")}] [{lvl}] [{evt}] {msg}</span>')
-                except Exception:
-                    continue
-        self.log_content.setHtml("<br>".join(html_lines))
-        self.log_content.moveCursor(QTextCursor.End)
-
-    def copy_log(self):
-        text = self.log_content.toPlainText()
-        if text:
-            QApplication.clipboard().setText(text)
-
-    def open_log_folder(self):
-        if not self.log_file:
-            return
-        folder = str(Path(self.log_file).parent)
-        if os.name == 'nt':
-            os.startfile(folder)
-        elif os.name == 'posix':
-            subprocess.Popen(['xdg-open', folder])
-        else:
-            QMessageBox.information(self, "Открыть папку", f"Путь: {folder}") 
+        log_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../logs/launcher.log'))
+        try:
+            with open(log_path, 'r', encoding='utf-8') as f:
+                log_text = f.read()
+            self.log_view.setPlainText(log_text)
+            self.log_view.moveCursor(QTextCursor.MoveOperation.End)
+        except Exception as e:
+            self.log_view.setPlainText(f"Ошибка чтения лога: {e}") 
