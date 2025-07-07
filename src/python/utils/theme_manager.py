@@ -4,7 +4,6 @@
 """
 
 from PySide6.QtWidgets import QApplication, QPushButton
-from loguru import logger
 from PySide6.QtGui import QPalette, QColor
 from PySide6.QtCore import Qt
 
@@ -55,8 +54,6 @@ class ThemeManager:
             self._apply_dark_theme()
         else:
             self._apply_light_theme()
-            
-        logger.info(f"Применена тема: {theme}")
     
     def _apply_dark_theme(self):
         """Применение темной темы"""
@@ -81,9 +78,6 @@ class ThemeManager:
         if theme in ["system", "light", "dark"]:
             self.config_manager.set("theme", theme)
             self.apply_theme_to_app()
-            logger.info(f"Тема изменена на: {theme}")
-        else:
-            logger.warning(f"Неизвестная тема: {theme}")
     
     def get_current_theme(self) -> str:
         """Получение текущей темы"""

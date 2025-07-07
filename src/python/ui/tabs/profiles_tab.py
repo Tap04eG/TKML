@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QPixmap, QIcon, QColor
 from PySide6.QtCore import Qt, QSize
 import requests
-from loguru import logger
 
 MAX_PROFILES = 8
 AVATAR_SIZE = 48
@@ -32,7 +31,7 @@ def get_avatar_pixmap(nick: str, size: int = AVATAR_SIZE) -> QPixmap:
             pixmap.loadFromData(response.content)
             return pixmap
     except Exception as e:
-        logger.warning(f"Не удалось загрузить аватар для {nick}: {e}")
+        print(f"Не удалось загрузить аватар для {nick}: {e}")
     # Заглушка: просто пустой серый квадрат
     pixmap = QPixmap(size, size)
     pixmap.fill(QColor("lightgray"))

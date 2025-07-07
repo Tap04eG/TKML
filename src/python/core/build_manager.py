@@ -8,12 +8,20 @@ import json
 import shutil
 import requests
 import threading
-from pathlib import Path
-from typing import Dict, List, Optional, Any, Callable
-from loguru import logger
-import zipfile
-import tempfile
 import time
+from pathlib import Path
+from typing import Dict, List, Optional, Any, Callable, Union
+from enum import Enum
+from loguru import logger
+
+
+class BuildStatus(Enum):
+    """Статусы сборок"""
+    READY = "ready"           # Готова к запуску
+    DOWNLOADING = "downloading"  # Скачивается
+    INSTALLING = "installing"    # Устанавливается
+    ERROR = "error"           # Ошибка
+    UNKNOWN = "unknown"       # Неизвестно
 
 
 class BuildManager:
@@ -37,7 +45,13 @@ class BuildManager:
         # Создаем необходимые директории
         self._create_directory_structure()
         
-        logger.info("BuildManager инициализирован")
+        # Словарь для отслеживания состояний сборок
+        self.build_states = {}
+        self.build_progress = {}
+        self.build_messages = {}
+        
+        # Блокировка для потокобезопасности
+        self._state_lock = threading.Lock()
     
     def _create_directory_structure(self):
         """Создание структуры папок"""
@@ -166,24 +180,35 @@ class BuildManager:
             log_callback(f"Начало загрузки Minecraft версии: {version}")
         logger.info(f"Попытка скачать Minecraft версию: {version}")
         logger.info(f"[BuildManager] Начало загрузки версии Minecraft: {version}")
+
         try:
+            logger.info(f"[BUILD] Начало загрузки Minecraft версии: {version}")
             version_dir = self.versions_path / version
+            
             if version_dir.exists():
                 if log_callback:
                     log_callback(f"Версия {version} уже существует: {version_dir}")
                 logger.info(f"Версия {version} уже существует")
                 return True
+                
+            logger.debug(f"[BUILD] Получение информации о версии {version}")
             version_info = self._get_version_info(version)
+            
             if not version_info:
                 if log_callback:
                     log_callback(f"Не удалось получить информацию о версии: {version}")
                 return False
+                
+            logger.debug(f"[BUILD] Информация о версии получена: {version_info.keys()}")
+            
             client_url = version_info.get("downloads", {}).get("client", {}).get("url")
             if not client_url:
                 if log_callback:
                     log_callback(f"URL клиента не найден для версии {version}")
                 logger.error(f"URL клиента не найден для версии {version}")
                 return False
+                
+            logger.info(f"[BUILD] URL клиента найден: {client_url}")
             client_path = version_dir / f"{version}.jar"
             if log_callback:
                 log_callback(f"Скачивание Minecraft client: {client_url} → {client_path}")
@@ -194,10 +219,18 @@ class BuildManager:
                 "src": client_url,
                 "msg": "Начинаю загрузку Minecraft client"
             })
+
             try:
+                version_dir.mkdir(parents=True, exist_ok=True)
+                logger.debug(f"[BUILD] Начало загрузки клиента в: {client_path}")
                 response = requests.get(client_url, stream=True, timeout=30)
                 response.raise_for_status()
+                
+                total_size = int(response.headers.get('content-length', 0))
+                logger.info(f"[BUILD] Размер клиента: {total_size} байт")
+                
                 with open(client_path, 'wb') as f:
+                    downloaded = 0
                     for chunk in response.iter_content(chunk_size=8192):
                         if chunk:
                             f.write(chunk)
@@ -232,150 +265,155 @@ class BuildManager:
     def _get_version_info(self, version: str) -> Optional[Dict[str, Any]]:
         """Получение информации о версии"""
         try:
+            logger.debug(f"[BUILD] Получение информации о версии {version}")
+            
             # Сначала пробуем получить из манифеста
             manifest_url = "https://launchermeta.mojang.com/mc/game/version_manifest.json"
+            logger.debug(f"[BUILD] Загрузка манифеста: {manifest_url}")
+            
             response = requests.get(manifest_url, timeout=30)
             response.raise_for_status()
             
             manifest = response.json()
+            logger.debug(f"[BUILD] Манифест загружен, версий в манифесте: {len(manifest.get('versions', []))}")
+            
             version_info = None
             
             for v in manifest.get("versions", []):
                 if v["id"] == version:
+                    logger.debug(f"[BUILD] Найдена версия {version} в манифесте")
                     # Получаем детальную информацию о версии
-                    version_response = requests.get(v["url"], timeout=30)
+                    version_url = v["url"]
+                    logger.debug(f"[BUILD] Загрузка детальной информации: {version_url}")
+                    
+                    version_response = requests.get(version_url, timeout=30)
                     version_response.raise_for_status()
                     version_info = version_response.json()
+                    logger.debug(f"[BUILD] Детальная информация получена: {version_info.keys()}")
                     break
+            
+            if version_info is None:
+                logger.error(f"[BUILD] Версия {version} не найдена в манифесте")
+                # Выводим доступные версии для отладки
+                available_versions = [v["id"] for v in manifest.get("versions", [])[:10]]
+                logger.debug(f"[BUILD] Первые 10 доступных версий: {available_versions}")
             
             return version_info
             
         except Exception as e:
-            logger.error(f"Ошибка получения информации о версии {version}: {e}")
+            logger.exception(f"[BUILD] Ошибка получения информации о версии {version}: {e}")
             return None
     
     def _download_file(self, url: str, file_path: Path, progress_callback: Optional[Callable] = None, index: Optional[int] = None, total: Optional[int] = None) -> bool:
-        logger.info(f"Начинаю скачивание файла: url={url}, file_path={file_path}, index={index}, total={total}")
-        logger.info({
-            "event": "download_file_attempt",
-            **({"index": index} if index is not None else {}),
-            **({"total": total} if total is not None else {}),
-            "filename": file_path.name,
-            "dst": str(file_path),
-            "src": url,
-            "msg": "Начинаю загрузку файла"
-        })
         try:
+            logger.debug(f"[BUILD] Начало загрузки файла: {url} -> {file_path}")
             file_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Проверяем, существует ли файл
+            if file_path.exists():
+                logger.debug(f"[BUILD] Файл уже существует: {file_path}")
+                return True
+                
             response = requests.get(url, stream=True, timeout=30)
             response.raise_for_status()
             total_size = int(response.headers.get('content-length', 0))
             downloaded = 0
+            
+            logger.debug(f"[BUILD] Размер файла: {total_size} байт")
+            
             with open(file_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
                         downloaded += len(chunk)
                         if total_size > 0 and progress_callback:
-                            progress = int((downloaded / total_size) * 100)
-                            progress_callback(progress, f"Загрузка {file_path.name}...")
-            logger.info({
-                "event": "download_file",
-                **({"index": index} if index is not None else {}),
-                **({"total": total} if total is not None else {}),
-                "filename": file_path.name,
-                "dst": str(file_path),
-                "src": url,
-                "msg": "Файл успешно загружен"
-            })
+                            try:
+                                progress = int((downloaded / total_size) * 100)
+                                progress_callback(progress, f"Загрузка {file_path.name}...")
+                            except Exception as e:
+                                logger.error(f"[BUILD] Ошибка в progress_callback при загрузке {file_path.name}: {e}")
+            
+            logger.debug(f"[BUILD] Файл успешно загружен: {file_path}")
             return True
+            
         except Exception as e:
-            logger.error({
-                "event": "download_file_error",
-                **({"index": index} if index is not None else {}),
-                **({"total": total} if total is not None else {}),
-                "filename": file_path.name,
-                "dst": str(file_path),
-                "src": url,
-                "msg": f"Ошибка загрузки: {e}"
-            })
+            logger.error(f"[BUILD] Ошибка загрузки файла {url}: {e}")
+            # Удаляем частично загруженный файл
+            try:
+                if file_path.exists():
+                    file_path.unlink()
+            except:
+                pass
             return False
     
     def _download_libraries(self, libraries: List[Dict], progress_callback: Optional[Callable] = None) -> bool:
-        logger.info(f"Начинаю загрузку библиотек: {len(libraries)} шт.")
         try:
+            logger.debug(f"[BUILD] Начало загрузки библиотек, всего: {len(libraries)}")
             total = len(libraries)
+            successful_downloads = 0
+            
             for i, library in enumerate(libraries):
-                if progress_callback:
-                    progress = 25 + int((i / total) * 10)  # 25-35%
-                    progress_callback(progress, f"Загрузка библиотеки {i+1}/{total}...")
-                if "rules" in library:
+                try:
+                    if progress_callback:
+                        try:
+                            progress = 25 + int((i / total) * 10)  # 25-35%
+                            progress_callback(progress, f"Загрузка библиотеки {i+1}/{total}...")
+                        except Exception as e:
+                            logger.error(f"[BUILD] Ошибка в progress_callback при загрузке библиотек: {e}")
+                            
+                    if "rules" in library:
+                        logger.debug(f"[BUILD] Пропускаем библиотеку с правилами: {library}")
+                        continue
+                        
+                    artifact = library.get("downloads", {}).get("artifact")
+                    if not artifact:
+                        logger.debug(f"[BUILD] Библиотека без артефакта: {library}")
+                        continue
+                        
+                    url = artifact.get("url")
+                    path = artifact.get("path")
+                    
+                    if url and path:
+                        lib_path = self.libraries_path / path
+                        logger.debug(f"[BUILD] Загрузка библиотеки: {path}")
+                        
+                        if self._download_file(url, lib_path, progress_callback, index=i+1, total=total):
+                            successful_downloads += 1
+                        else:
+                            logger.error(f"[BUILD] Не удалось загрузить библиотеку: {path}")
+                    else:
+                        logger.warning(f"[BUILD] Библиотека без URL или пути: {library}")
+                        
+                except Exception as e:
+                    logger.error(f"[BUILD] Ошибка при обработке библиотеки {i}: {e}")
                     continue
-                artifact = library.get("downloads", {}).get("artifact")
-                if not artifact:
-                    continue
-                url = artifact.get("url")
-                path = artifact.get("path")
-                if url and path:
-                    lib_path = self.libraries_path / path
-                    self._download_file(url, lib_path, progress_callback, index=i+1, total=total)
-            logger.success("[BuildManager] Библиотеки успешно загружены")
-            return True
+                    
+            logger.info(f"[BUILD] Загрузка библиотек завершена: {successful_downloads}/{total} успешно")
+            return successful_downloads > 0  # Возвращаем True если хотя бы одна библиотека загружена
+            
         except Exception as e:
-            logger.error("[BuildManager] Ошибка загрузки библиотек")
+            logger.exception(f"[BUILD] Критическая ошибка при загрузке библиотек: {e}")
             return False
     
     def _download_assets(self, version_info: Dict[str, Any], progress_callback: Optional[Callable] = None) -> bool:
-        logger.info(f"Начинаю загрузку assets для версии: {version_info.get('id')}")
-        logger.info(f"[BuildManager] Начало загрузки ресурсов для версии: {version_info.get('id')}")
         try:
             assets = version_info.get("assetIndex", {})
             url = assets.get("url")
             id_ = assets.get("id")
             if not url or not id_:
-                logger.error({
-                    "event": "download_asset_error",
-                    "filename": id_,
-                    "src": url,
-                    "msg": "Нет информации о ресурсе"
-                })
                 return False
             assets_dir = self.assets_path / "indexes"
             assets_dir.mkdir(parents=True, exist_ok=True)
             asset_path = assets_dir / f"{id_}.json"
-            logger.info({
-                "event": "download_asset_attempt",
-                "filename": f"{id_}.json",
-                "dst": str(asset_path),
-                "src": url,
-                "msg": "Начинаю загрузку assetIndex"
-            })
             try:
                 response = requests.get(url, timeout=30)
                 response.raise_for_status()
                 with open(asset_path, 'wb') as f:
                     f.write(response.content)
-                logger.info({
-                    "event": "download_asset",
-                    "filename": f"{id_}.json",
-                    "dst": str(asset_path),
-                    "src": url,
-                    "msg": "assetIndex успешно загружен"
-                })
+                return True
             except Exception as e:
-                logger.error({
-                    "event": "download_asset_error",
-                    "filename": f"{id_}.json",
-                    "dst": str(asset_path),
-                    "src": url,
-                    "msg": f"Ошибка загрузки assetIndex: {e}"
-                })
                 return False
-            # Можно добавить аналогичное логирование для отдельных файлов assets, если нужно
-            logger.success(f"[BuildManager] Ресурсы для версии {version_info.get('id')} успешно загружены")
-            return True
         except Exception as e:
-            logger.exception(f"[BuildManager] Ошибка загрузки ресурсов для версии {version_info.get('id')}")
             return False
     
     def _install_loader(self, minecraft_version: str, loader: str, loader_version: str, progress_callback: Optional[Callable] = None, log_callback: Optional[Callable] = None) -> bool:
@@ -392,11 +430,9 @@ class BuildManager:
             elif loader in ["Paper", "Purpur"]:
                 return self._install_server_jar(minecraft_version, loader, loader_version, progress_callback, log_callback)
             else:
-                logger.warning(f"Лоадер {loader} не поддерживается")
                 return True
                 
         except Exception as e:
-            logger.error(f"Ошибка установки лоадера {loader}: {e}")
             return False
     
     def _install_fabric(self, minecraft_version: str, loader_version: str, progress_callback: Optional[Callable] = None, log_callback: Optional[Callable] = None) -> bool:
@@ -405,34 +441,56 @@ class BuildManager:
             if log_callback:
                 log_callback(f"Установка Fabric: {minecraft_version} {loader_version}")
             if progress_callback:
-                progress_callback(45, "Установка Fabric...")
+                try:
+                    progress_callback(45, "Установка Fabric...")
+                except Exception as e:
+                    logger.error(f"[BUILD] Ошибка в progress_callback при установке Fabric: {e}")
             
             # Получаем URL для Fabric
             url = f"https://meta.fabricmc.net/v2/versions/loader/{minecraft_version}/{loader_version}/profile/json"
+            logger.debug(f"[BUILD] Fabric URL: {url}")
             
             # Загружаем профиль Fabric
-            response = requests.get(url, timeout=30)
-            response.raise_for_status()
-            
-            fabric_profile = response.json()
-            
-            # Сохраняем профиль
-            profile_name = f"fabric-loader-{loader_version}-{minecraft_version}"
-            profile_path = self.versions_path / profile_name / f"{profile_name}.json"
-            profile_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            with open(profile_path, 'w', encoding='utf-8') as f:
-                json.dump(fabric_profile, f, indent=2)
-            
-            # Загружаем библиотеки Fabric
-            libraries = fabric_profile.get("libraries", [])
-            if not self._download_libraries(libraries, progress_callback):
+            try:
+                response = requests.get(url, timeout=30)
+                response.raise_for_status()
+                fabric_profile = response.json()
+                logger.debug(f"[BUILD] Fabric профиль получен успешно")
+            except Exception as e:
+                logger.error(f"[BUILD] Ошибка получения Fabric профиля: {e}")
                 return False
             
-            return True
+            # Сохраняем профиль
+            try:
+                profile_name = f"fabric-loader-{loader_version}-{minecraft_version}"
+                profile_path = self.versions_path / profile_name / f"{profile_name}.json"
+                profile_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                with open(profile_path, 'w', encoding='utf-8') as f:
+                    json.dump(fabric_profile, f, indent=2)
+                logger.debug(f"[BUILD] Fabric профиль сохранен: {profile_path}")
+            except Exception as e:
+                logger.error(f"[BUILD] Ошибка сохранения Fabric профиля: {e}")
+                return False
+            
+            # Загружаем библиотеки Fabric
+            try:
+                libraries = fabric_profile.get("libraries", [])
+                logger.debug(f"[BUILD] Найдено библиотек Fabric: {len(libraries)}")
+                
+                if not self._download_libraries(libraries, progress_callback):
+                    logger.error(f"[BUILD] Ошибка загрузки библиотек Fabric")
+                    return False
+                    
+                logger.info(f"[BUILD] Fabric успешно установлен")
+                return True
+                
+            except Exception as e:
+                logger.error(f"[BUILD] Ошибка загрузки библиотек Fabric: {e}")
+                return False
             
         except Exception as e:
-            logger.error(f"Ошибка установки Fabric: {e}")
+            logger.exception(f"[BUILD] Критическая ошибка при установке Fabric: {e}")
             return False
     
     def _install_forge(self, minecraft_version: str, forge_version: str, progress_callback: Optional[Callable] = None, log_callback: Optional[Callable] = None) -> bool:
@@ -451,14 +509,9 @@ class BuildManager:
             if not self._download_file(url, installer_path, progress_callback):
                 return False
             
-            # Запускаем установщик (упрощенная версия)
-            # В реальной реализации здесь нужно запустить Java с установщиком
-            logger.info(f"Forge установщик загружен: {installer_path}")
-            
             return True
             
         except Exception as e:
-            logger.error(f"Ошибка установки Forge: {e}")
             return False
     
     def _install_quilt(self, minecraft_version: str, loader_version: str, progress_callback: Optional[Callable] = None, log_callback: Optional[Callable] = None) -> bool:
@@ -494,11 +547,11 @@ class BuildManager:
             return True
             
         except Exception as e:
-            logger.error(f"Ошибка установки Quilt: {e}")
             return False
     
     def _install_neoforge(self, minecraft_version: str, neoforge_version: str, progress_callback: Optional[Callable] = None, log_callback: Optional[Callable] = None) -> bool:
         logger.info(f"Установка NeoForge: {minecraft_version} {neoforge_version}")
+
         try:
             if log_callback:
                 log_callback(f"Установка NeoForge: {minecraft_version} {neoforge_version}")
@@ -513,17 +566,14 @@ class BuildManager:
             if not self._download_file(url, installer_path, progress_callback):
                 return False
             
-            # Запускаем установщик (упрощенная версия)
-            logger.info(f"NeoForge установщик загружен: {installer_path}")
-            
             return True
             
         except Exception as e:
-            logger.error(f"Ошибка установки NeoForge: {e}")
             return False
     
     def _install_server_jar(self, minecraft_version: str, server_type: str, build_number: str, progress_callback: Optional[Callable] = None, log_callback: Optional[Callable] = None) -> bool:
         logger.info(f"Установка серверного JAR: {server_type} {build_number} для {minecraft_version}")
+
         try:
             if log_callback:
                 log_callback(f"Установка серверного JAR: {server_type} {build_number} для {minecraft_version}")
@@ -537,13 +587,6 @@ class BuildManager:
                 return False
             server_jar_path = self.versions_path / f"{server_type.lower()}-{minecraft_version}-{build_number}" / f"{server_type.lower()}-{minecraft_version}-{build_number}.jar"
             server_jar_path.parent.mkdir(parents=True, exist_ok=True)
-            logger.info({
-                "event": "download_server_attempt",
-                "filename": server_jar_path.name,
-                "dst": str(server_jar_path),
-                "src": url,
-                "msg": "Начинаю загрузку server jar"
-            })
             try:
                 response = requests.get(url, stream=True, timeout=30)
                 response.raise_for_status()
@@ -551,29 +594,13 @@ class BuildManager:
                     for chunk in response.iter_content(chunk_size=8192):
                         if chunk:
                             f.write(chunk)
-                logger.info({
-                    "event": "download_server",
-                    "filename": server_jar_path.name,
-                    "dst": str(server_jar_path),
-                    "src": url,
-                    "msg": "Server jar успешно загружен"
-                })
+                return True
             except Exception as e:
-                logger.error({
-                    "event": "download_server_error",
-                    "filename": server_jar_path.name,
-                    "dst": str(server_jar_path),
-                    "src": url,
-                    "msg": f"Ошибка загрузки server jar: {e}"
-                })
                 return False
-            return True
         except Exception as e:
-            logger.error(f"Ошибка установки {server_type}: {e}")
             return False
     
     def _create_launch_profile(self, build_config: Dict[str, Any], instance_dir: Path, version_id: str):
-        logger.info(f"Создание профиля запуска: {build_config}, instance_dir={instance_dir}, version_id={version_id}")
         try:
             profile_data = {
                 "name": build_config.get("name"),
@@ -602,13 +629,10 @@ class BuildManager:
             with open(profiles_file, 'w', encoding='utf-8') as f:
                 json.dump(profiles, f, indent=2, ensure_ascii=False)
             
-            logger.info(f"Профиль запуска создан: {profile_name}")
-            
         except Exception as e:
-            logger.error(f"Ошибка создания профиля запуска: {e}")
+            pass
     
     def _create_instance_config(self, build_config: Dict[str, Any], instance_dir: Path):
-        logger.info(f"Создание конфигурации сборки: {build_config}, instance_dir={instance_dir}")
         try:
             config_data = {
                 "name": build_config.get("name"),
@@ -625,41 +649,65 @@ class BuildManager:
             with open(config_file, 'w', encoding='utf-8') as f:
                 json.dump(config_data, f, indent=2, ensure_ascii=False)
             
-            logger.info(f"Конфигурация сборки создана: {config_file}")
-            
         except Exception as e:
-            logger.error(f"Ошибка создания конфигурации сборки: {e}")
+            pass
     
     def get_builds(self) -> List[Dict[str, Any]]:
         """Получение списка созданных сборок"""
         try:
             builds = []
-            
-            if self.instances_path.exists():
-                for instance_dir in self.instances_path.iterdir():
-                    if instance_dir.is_dir():
-                        config_file = instance_dir / "instance.cfg"
-                        if config_file.exists():
-                            with open(config_file, 'r', encoding='utf-8') as f:
-                                config = json.load(f)
-                        else:
-                            config = {"name": instance_dir.name}
+            if not self.instances_path.exists():
+                logger.debug("[BUILD] Папка instances не существует")
+                return builds
+                
+            for instance_dir in self.instances_path.iterdir():
+                try:
+                    if not instance_dir.is_dir():
+                        continue
                         
-                        build_info = {
-                            "name": config.get("name", instance_dir.name),
-                            "path": str(instance_dir),
-                            "created": config.get("created", instance_dir.stat().st_ctime),
-                            "last_used": config.get("last_used", instance_dir.stat().st_mtime),
-                            "minecraft_version": config.get("minecraft_version", "Unknown"),
-                            "loader": config.get("loader", "Unknown"),
-                            "notes": config.get("notes", "")
-                        }
-                        builds.append(build_info)
-            
+                    config_file = instance_dir / "instance.cfg"
+                    if not config_file.exists():
+                        logger.warning(f"[BUILD] Конфигурационный файл не найден: {config_file}")
+                        continue
+                        
+                    # Безопасное чтение конфигурации
+                    try:
+                        with open(config_file, 'r', encoding='utf-8') as f:
+                            config = json.load(f)
+                    except (json.JSONDecodeError, UnicodeDecodeError, IOError) as e:
+                        logger.error(f"[BUILD] Ошибка чтения конфигурации {config_file}: {e}")
+                        continue
+                        
+                    build_name = config.get("name", instance_dir.name)
+                    if not build_name:
+                        logger.warning(f"[BUILD] Пустое имя сборки в {instance_dir}")
+                        continue
+                        
+                    state_info = self.get_build_state(build_name)
+                    build_info = {
+                        "name": build_name,
+                        "path": str(instance_dir),
+                        "created": config.get("created", instance_dir.stat().st_ctime),
+                        "last_used": config.get("last_used", instance_dir.stat().st_mtime),
+                        "minecraft_version": config.get("minecraft_version", "Unknown"),
+                        "loader": config.get("loader", "Unknown"),
+                        "notes": config.get("notes", ""),
+                        "status": state_info["status"],
+                        "progress": state_info["progress"],
+                        "message": state_info["message"]
+                    }
+                    builds.append(build_info)
+                    logger.debug(f"[BUILD] Добавлена сборка: {build_name}")
+                    
+                except Exception as e:
+                    logger.error(f"[BUILD] Ошибка обработки сборки {instance_dir}: {e}")
+                    continue
+                    
+            logger.debug(f"[BUILD] Всего найдено сборок: {len(builds)}")
             return builds
             
         except Exception as e:
-            logger.error(f"Ошибка получения списка сборок: {e}")
+            logger.exception("[BUILD] Критическая ошибка при получении списка сборок")
             return []
     
     def delete_build(self, build_name: str) -> bool:
@@ -669,13 +717,16 @@ class BuildManager:
             
             if instance_dir.exists():
                 shutil.rmtree(instance_dir)
-                logger.info(f"Сборка {build_name} удалена")
+                # Очищаем состояние сборки
+                self.clear_build_state(build_name)
+                logger.info(f"[BUILD] Сборка удалена: {build_name}")
                 return True
             
+            logger.warning(f"[BUILD] Не удалось найти сборку для удаления: {build_name}")
             return False
             
         except Exception as e:
-            logger.error(f"Ошибка удаления сборки {build_name}: {e}")
+            logger.exception(f"[BUILD] Ошибка при удалении сборки {build_name}")
             return False
     
     def get_build_logs(self, build_name: str) -> List[Dict[str, Any]]:
@@ -698,5 +749,43 @@ class BuildManager:
             return logs
             
         except Exception as e:
-            logger.error(f"Ошибка получения логов сборки {build_name}: {e}")
-            return [] 
+            return []
+    
+    def is_build_ready(self, build_name: str) -> bool:
+        """Проверка готовности сборки к запуску"""
+        try:
+            instance_dir = self.instances_path / self._sanitize_name(build_name)
+            
+            # Проверяем существование директории
+            if not instance_dir.exists():
+                return False
+            
+            # Проверяем наличие конфигурации
+            config_file = instance_dir / "instance.cfg"
+            if not config_file.exists():
+                return False
+            
+            # Проверяем наличие .minecraft папки
+            minecraft_dir = instance_dir / ".minecraft"
+            if not minecraft_dir.exists():
+                return False
+            
+            # Проверяем состояние сборки
+            state_info = self.get_build_state(build_name)
+            return state_info["status"] == BuildStatus.READY
+            
+        except Exception as e:
+            return False
+    
+    def launch_build(self, build_name: str) -> bool:
+        """Запуск сборки"""
+        try:
+            if not self.is_build_ready(build_name):
+                return False
+            
+            # Здесь будет логика запуска Minecraft
+            # Пока что просто возвращаем True
+            return True
+            
+        except Exception as e:
+            return False 

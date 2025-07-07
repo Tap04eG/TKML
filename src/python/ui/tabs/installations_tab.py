@@ -2,6 +2,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QComboBox, 
     QListWidget, QListWidgetItem, QSizePolicy, QDialog, QDialogButtonBox, 
     QMessageBox, QMenu, QTabWidget, QCheckBox, QScrollArea, QFrame, QGridLayout, 
+
     QGraphicsDropShadowEffect, QProgressBar, QButtonGroup, QStackedWidget, QFileDialog, QTextEdit
 )
 from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve, QTimer, QObject, QRectF, Slot, QThread
@@ -53,256 +54,280 @@ ICON_PATHS = {
 MOJANG_MANIFEST_URL = "https://launchermeta.mojang.com/mc/game/version_manifest.json"
 
 def get_icon(version_type):
-    path = ICON_PATHS.get(version_type)
-    if path and os.path.exists(path):
-        return QIcon(path)
-    return QIcon()  # Пустая иконка-заглушка
+    try:
+        if not version_type:
+            return QIcon()
+            
+        path = ICON_PATHS.get(str(version_type))
+        if path and os.path.exists(path):
+            return QIcon(path)
+        return QIcon()  # Пустая иконка-заглушка
+    except Exception as e:
+        logger.error(f"[UI] Ошибка получения иконки для {version_type}: {e}")
+        return QIcon()  # Пустая иконка-заглушка
 
 class VersionCard(QFrame):
     installed_signal = Signal(dict)
     
     def __init__(self, version, installed=False, parent=None):
         super().__init__(parent)
-        self.version = version
-        self.setObjectName("VersionCard")
-        self.setFrameShape(QFrame.Shape.StyledPanel)
-        
-        # Стиль карточки версии
-        self.setStyleSheet(f"""
-            QFrame#VersionCard {{
-                background: {MC_GRAY};
-                border: 2px solid {MC_BORDER};
-                border-radius: 12px;
-                margin: 6px;
-            }}
-            QFrame#VersionCard:hover {{
-                border: 2px solid {MC_GREEN};
-                background: rgba(58, 125, 68, 0.1);
-                box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
-            }}
-            QLabel {{
-                color: {MC_TEXT};
-            }}
-            QPushButton {{
-                background: {MC_GREEN};
-                color: white;
-                border: none;
-                border-radius: 8px;
-                padding: 8px 16px;
-                font-weight: 500;
-            }}
-            QPushButton:hover {{
-                background: {MC_DARK_GREEN};
-            }}
-            QPushButton:disabled {{
-                background: #444;
-                color: #aaa;
-            }}
-            QProgressBar {{
-                height: 6px;
-                border-radius: 3px;
-                background: rgba(0, 0, 0, 0.3);
-            }}
-            QProgressBar::chunk {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {MC_GREEN}, stop:1 {MC_LIGHT_GREEN});
-                border-radius: 3px;
-            }}
-        """)
-        
-        # Drop shadow
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(16)
-        shadow.setOffset(0, 4)
-        shadow.setColor(QColor(0, 0, 0, 100))
-        self.setGraphicsEffect(shadow)
-        
-        # Анимация увеличения
-        self.anim = QPropertyAnimation(self, b"geometry")
-        self.anim.setDuration(120)
-        self.anim.setEasingCurve(QEasingCurve.Type.OutQuad)
-        self._orig_geom = None
-        self.enterEvent = self._on_enter
-        self.leaveEvent = self._on_leave
-        
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(15)
-        
-        # Иконка версии
-        icon = QLabel()
-        icon.setPixmap(get_icon(version["type"]).pixmap(48, 48))
-        layout.addWidget(icon)
-        
-        # Информация о версии
-        info = QVBoxLayout()
-        info.setSpacing(4)
-        
-        name = QLabel(f"<b>{version['name']}</b>")
-        name.setStyleSheet(f"font-size: 16px; color: {MC_TEXT_LIGHT};")
-        
-        vtype = QLabel(TYPE_LABELS.get(version["type"], version["type"]))
-        vtype.setStyleSheet(f"font-size: 14px; color: {MC_TEXT_MUTED};")
-        
-        date = QLabel(version.get("date", ""))
-        date.setStyleSheet(f"font-size: 12px; color: {MC_TEXT_MUTED};")
-        
-        info.addWidget(name)
-        info.addWidget(vtype)
-        info.addWidget(date)
-        layout.addLayout(info)
-        
-        layout.addStretch()
-        
-        # Кнопка установки
-        self.install_btn = QPushButton("Установить" if not installed else "Установлено")
-        self.install_btn.setEnabled(not installed)
-        self.install_btn.clicked.connect(self.start_install)
-        layout.addWidget(self.install_btn)
-        
-        # Статус
-        self.status_label = QLabel("Установлено" if installed else "Не установлено")
-        self.status_label.setStyleSheet(f"font-size: 14px; color: {MC_GREEN if installed else MC_TEXT_MUTED};")
-        layout.addWidget(self.status_label)
-        
-        # Прогресс-бар
-        self.progress = QProgressBar()
-        self.progress.setMinimum(0)
-        self.progress.setMaximum(100)
-        self.progress.setValue(0)
-        self.progress.setVisible(False)
-        self.progress.setFixedWidth(100)
-        layout.addWidget(self.progress)
-        
-        self.timer = None
+        try:
+            if not version or not isinstance(version, dict):
+                logger.error(f"[UI] Некорректная версия для VersionCard: {version}")
+                version = {"name": "Unknown", "type": "release"}
+                
+            self.version = version
+            self.setObjectName("VersionCard")
+            self.setFrameShape(QFrame.Shape.StyledPanel)
+            
+            # Стиль карточки версии
+            self.setStyleSheet(f"""
+                QFrame#VersionCard {{
+                    background: {MC_GRAY};
+                    border: 2px solid {MC_BORDER};
+                    border-radius: 12px;
+                    margin: 6px;
+                }}
+                QFrame#VersionCard:hover {{
+                    border: 2px solid {MC_GREEN};
+                    background: rgba(58, 125, 68, 0.1);
+                    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+                }}
+                QLabel {{
+                    color: {MC_TEXT};
+                }}
+                QPushButton {{
+                    background: {MC_GREEN};
+                    color: white;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 8px 16px;
+                    font-weight: 500;
+                }}
+                QPushButton:hover {{
+                    background: {MC_DARK_GREEN};
+                }}
+                QPushButton:disabled {{
+                    background: #444;
+                    color: #aaa;
+                }}
+                QProgressBar {{
+                    height: 6px;
+                    border-radius: 3px;
+                    background: rgba(0, 0, 0, 0.3);
+                }}
+                QProgressBar::chunk {{
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {MC_GREEN}, stop:1 {MC_LIGHT_GREEN});
+                    border-radius: 3px;
+                }}
+            """)
+            
+            # Drop shadow
+            shadow = QGraphicsDropShadowEffect(self)
+            shadow.setBlurRadius(16)
+            shadow.setOffset(0, 4)
+            shadow.setColor(QColor(0, 0, 0, 100))
+            self.setGraphicsEffect(shadow)
+            
+            # Анимация увеличения
+            self.anim = QPropertyAnimation(self, b"geometry")
+            self.anim.setDuration(120)
+            self.anim.setEasingCurve(QEasingCurve.Type.OutQuad)
+            self._orig_geom = None
+            self.enterEvent = self._on_enter
+            self.leaveEvent = self._on_leave
+            
+            layout = QHBoxLayout(self)
+            layout.setContentsMargins(12, 12, 12, 12)
+            layout.setSpacing(15)
+            
+            # Иконка версии
+            icon = QLabel()
+            icon.setPixmap(get_icon(version["type"]).pixmap(48, 48))
+            layout.addWidget(icon)
+            
+            # Информация о версии
+            info = QVBoxLayout()
+            info.setSpacing(4)
+            
+            name = QLabel(f"<b>{version['name']}</b>")
+            name.setStyleSheet(f"font-size: 16px; color: {MC_TEXT_LIGHT};")
+            
+            vtype = QLabel(TYPE_LABELS.get(version["type"], version["type"]))
+            vtype.setStyleSheet(f"font-size: 14px; color: {MC_TEXT_MUTED};")
+            
+            date = QLabel(version.get("date", ""))
+            date.setStyleSheet(f"font-size: 12px; color: {MC_TEXT_MUTED};")
+            
+            info.addWidget(name)
+            info.addWidget(vtype)
+            info.addWidget(date)
+            layout.addLayout(info)
+            
+            layout.addStretch()
+            
+            # Кнопка установки
+            self.install_btn = QPushButton("Установить" if not installed else "Установлено")
+            self.install_btn.setEnabled(not installed)
+            self.install_btn.clicked.connect(self.start_install)
+            layout.addWidget(self.install_btn)
+            
+            # Статус
+            self.status_label = QLabel("Установлено" if installed else "Не установлено")
+            self.status_label.setStyleSheet(f"font-size: 14px; color: {MC_GREEN if installed else MC_TEXT_MUTED};")
+            layout.addWidget(self.status_label)
+            
+            # Прогресс-бар
+            self.progress = QProgressBar()
+            self.progress.setMinimum(0)
+            self.progress.setMaximum(100)
+            self.progress.setValue(0)
+            self.progress.setVisible(False)
+            self.progress.setFixedWidth(100)
+            layout.addWidget(self.progress)
+            
+            self.timer = None
+            
+        except Exception as e:
+            logger.exception(f"[UI] Ошибка создания VersionCard: {e}")
+            # Создаем минимальный виджет с ошибкой
+            self.version = {"name": "Error", "type": "release"}
+            layout = QHBoxLayout(self)
+            error_label = QLabel("Ошибка создания карточки")
+            error_label.setStyleSheet(f"color: {MC_RED};")
+            layout.addWidget(error_label)
 
     def _on_enter(self, event):
-        if not self._orig_geom:
-            self._orig_geom = self.geometry()
-        rect = self.geometry().adjusted(-6, -6, 6, 6)
-        self.anim.stop()
-        self.anim.setStartValue(self.geometry())
-        self.anim.setEndValue(rect)
-        self.anim.start()
-
-    def _on_leave(self, event):
-        if self._orig_geom:
+        try:
+            if not self._orig_geom:
+                self._orig_geom = self.geometry()
+            rect = self.geometry().adjusted(-6, -6, 6, 6)
             self.anim.stop()
             self.anim.setStartValue(self.geometry())
-            self.anim.setEndValue(self._orig_geom)
+            self.anim.setEndValue(rect)
             self.anim.start()
+        except Exception as e:
+            logger.error(f"[UI] Ошибка в _on_enter: {e}")
+
+    def _on_leave(self, event):
+        try:
+            if self._orig_geom:
+                self.anim.stop()
+                self.anim.setStartValue(self.geometry())
+                self.anim.setEndValue(self._orig_geom)
+                self.anim.start()
+        except Exception as e:
+            logger.error(f"[UI] Ошибка в _on_leave: {e}")
 
     def start_install(self):
-        self.install_btn.setEnabled(False)
-        self.progress.setVisible(True)
-        self.progress.setValue(0)
-        self.status_label.setText("Установка...")
-        self.status_label.setStyleSheet(f"color: {MC_BLUE};")
-        
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self._on_progress)
-        self.timer.start(30)
+        try:
+            self.install_btn.setEnabled(False)
+            self.progress.setVisible(True)
+            self.progress.setValue(0)
+            self.status_label.setText("Установка...")
+            self.status_label.setStyleSheet(f"color: {MC_BLUE};")
+            
+            self.timer = QTimer(self)
+            self.timer.timeout.connect(self._on_progress)
+            self.timer.start(30)
+            
+        except Exception as e:
+            logger.error(f"[UI] Ошибка при запуске установки: {e}")
 
     def _on_progress(self):
-        val = self.progress.value() + 2
-        if val >= 100:
-            self.progress.setValue(100)
-            self.progress.setVisible(False)
-            self.status_label.setText("Установлено")
-            self.status_label.setStyleSheet(f"color: {MC_GREEN};")
-            self.install_btn.setText("Установлено")
-            self.install_btn.setEnabled(False)
-            if self.timer:
-                self.timer.stop()
-            self.installed_signal.emit(self.version)
-        else:
-            self.progress.setValue(val)
+        try:
+            val = self.progress.value() + 2
+            if val >= 100:
+                self.progress.setValue(100)
+                self.progress.setVisible(False)
+                self.status_label.setText("Установлено")
+                self.status_label.setStyleSheet(f"color: {MC_GREEN};")
+                self.install_btn.setText("Установлено")
+                self.install_btn.setEnabled(False)
+                if self.timer:
+                    self.timer.stop()
+                self.installed_signal.emit(self.version)
+            else:
+                self.progress.setValue(val)
+        except Exception as e:
+            logger.error(f"[UI] Ошибка в _on_progress: {e}")
 
 class InstalledVersionWidget(QWidget):
     remove_requested = Signal(dict)
+    launch_requested = Signal(dict)
     
     def __init__(self, version, parent=None):
         super().__init__(parent)
         self.version = version
-        
-        # Основной стиль виджета
-        self.setStyleSheet(f"""
-            QWidget {{
-                background: {MC_GRAY};
-                border-radius: 12px;
-                border: 1px solid {MC_BORDER};
-                padding: 8px;
-            }}
-            QLabel {{
-                color: {MC_TEXT};
-            }}
-            QPushButton {{
-                border-radius: 6px;
-                padding: 6px 12px;
-                font-size: 14px;
-            }}
+        self.build_name = version.get('name', '')
+        self.status = version.get('status', 'unknown')
+        self.progress = version.get('progress', 0)
+        self.message = version.get('message', '')
+        self.init_ui()
+    
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+        self.setStyleSheet("""
+            QWidget {
+                background: #23272e;
+                border-radius: 14px;
+                border: 2px solid #333;
+            }
         """)
-        
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(12)
-        
-        # Иконка версии
+        # Название и иконка
+        title_layout = QHBoxLayout()
         icon = QLabel()
-        icon.setPixmap(get_icon(version["type"]).pixmap(32, 32))
-        layout.addWidget(icon)
-        
-        # Название и тип версии
-        name = QLabel(f"<b>{version['name']}</b> [{TYPE_LABELS.get(version['type'], version['type'])}]")
-        name.setStyleSheet(f"font-size: 14px; color: {MC_TEXT_LIGHT};")
-        layout.addWidget(name)
-        
-        layout.addStretch()
-        
+        icon.setPixmap(get_icon(self.version.get('type', 'release')).pixmap(32, 32))
+        title_layout.addWidget(icon)
+        title = QLabel(f"<b>{self.build_name}</b>")
+        title.setStyleSheet("font-size: 16px; color: #fff;")
+        title_layout.addWidget(title)
+        title_layout.addStretch()
+        layout.addLayout(title_layout)
+        # Версия и лоадер
+        sub = QLabel(f"{self.version.get('minecraft_version', '')} - {self.version.get('loader', '')}")
+        sub.setStyleSheet("color: #aaa; font-size: 13px;")
+        layout.addWidget(sub)
         # Статус
-        self.status = QLabel(version.get("status", "Установлено"))
-        self.status.setStyleSheet(f"font-size: 13px; color: {MC_GREEN};")
-        layout.addWidget(self.status)
-        
-        # Кнопка запуска
+        self.status_label = QLabel(self._get_status_text(self.status))
+        self.status_label.setStyleSheet(f"color: {self._get_status_color(self.status)}; font-size: 13px;")
+        layout.addWidget(self.status_label)
+        # Кнопки
+        btns = QHBoxLayout()
         self.launch_btn = QPushButton("Запустить")
-        self.launch_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {MC_GREEN};
-                color: white;
-            }}
-            QPushButton:hover {{
-                background: {MC_DARK_GREEN};
-            }}
-        """)
-        self.launch_btn.clicked.connect(self.launch)
-        layout.addWidget(self.launch_btn)
-        
-        # Кнопка удаления
-        self.delete_btn = QPushButton("Удалить")
-        self.delete_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {MC_RED};
-                color: white;
-            }}
-            QPushButton:hover {{
-                background: #c82333;
-            }}
-        """)
-        self.delete_btn.clicked.connect(self.delete)
-        layout.addWidget(self.delete_btn)
-    
-    def launch(self):
-        QMessageBox.information(self, "Запуск", f"Запуск версии {self.version['name']}")
-    
-    def delete(self):
-        reply = QMessageBox.question(
-            self, 
-            "Удалить версию", 
-            f"Удалить версию {self.version['name']}?", 
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            self.remove_requested.emit(self.version)
+        self.launch_btn.setEnabled(self.status in ("ready", "Готово к запуску"))
+        self.launch_btn.clicked.connect(self._on_launch)
+        btns.addWidget(self.launch_btn)
+        del_btn = QPushButton("Удалить")
+        del_btn.setStyleSheet("background: #dc3545; color: #fff;")
+        del_btn.clicked.connect(self._on_delete)
+        btns.addWidget(del_btn)
+        layout.addLayout(btns)
+    def _get_status_text(self, status):
+        if status == "ready": return "Готово к запуску"
+        if status == "downloading": return "Загрузка..."
+        if status == "installing": return "Установка..."
+        if status == "error": return "Ошибка"
+        return "Неизвестно"
+    def _get_status_color(self, status):
+        if status == "ready": return "#4caf50"
+        if status == "downloading": return "#ffaa00"
+        if status == "installing": return "#3a7dcf"
+        if status == "error": return "#dc3545"
+        return "#aaa"
+    def update_status(self, status, progress=0, message=""):
+        self.status = status
+        self.progress = progress
+        self.message = message
+        self.status_label.setText(self._get_status_text(status))
+        self.status_label.setStyleSheet(f"color: {self._get_status_color(status)}; font-size: 13px;")
+        self.launch_btn.setEnabled(status == "ready")
+    def _on_launch(self):
+        self.launch_requested.emit(self.version)
+    def _on_delete(self):
+        self.remove_requested.emit(self.version)
 
 class LoaderUpdater(QObject):
     update = Signal(list)
@@ -326,15 +351,18 @@ class RoundedPanel(QWidget):
         ))
 
     def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = QRectF(self.rect())
-        rect.adjust(self.border_width/2, self.border_width/2, -self.border_width/2, -self.border_width/2)
-        
-        # Рисуем фон с прозрачностью
-        painter.setBrush(QBrush(QColor(self.bg_color.red(), self.bg_color.green(), self.bg_color.blue(), 200)))
-        painter.setPen(QPen(self.border_color, self.border_width))
-        painter.drawRoundedRect(rect, self.radius, self.radius)
+        try:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            rect = QRectF(self.rect())
+            rect.adjust(self.border_width/2, self.border_width/2, -self.border_width/2, -self.border_width/2)
+            
+            # Рисуем фон с прозрачностью
+            painter.setBrush(QBrush(QColor(self.bg_color.red(), self.bg_color.green(), self.bg_color.blue(), 200)))
+            painter.setPen(QPen(self.border_color, self.border_width))
+            painter.drawRoundedRect(rect, self.radius, self.radius)
+        except Exception as e:
+            logger.error(f"[UI] Ошибка отрисовки RoundedPanel: {e}")
 
 class BuildWorker(QObject):
     progress = Signal(int, str)
@@ -346,6 +374,7 @@ class BuildWorker(QObject):
         super().__init__()
         self.build_manager = build_manager
         self.build_config = build_config
+        logger.info(f"[WORKER] BuildWorker создан для сборки: {build_config.get('name', 'Unknown')}")
 
     def run(self):
         print('BuildWorker.run called')
@@ -364,6 +393,10 @@ class BuildWorker(QObject):
 
 class InstallationsTab(QWidget):
     progress_update = Signal(int, str)
+    request_update_builds = Signal()
+    request_add_build = Signal(dict)
+    request_handle_error = Signal(str, str)
+    request_remove_build = Signal(dict)
     
     def __init__(self, build_manager, minecraft_manager, get_nick_func=None, parent=None):
         super().__init__(parent)
@@ -371,8 +404,20 @@ class InstallationsTab(QWidget):
         self.minecraft_manager = minecraft_manager
         self.get_nick_func = get_nick_func or (lambda: "Player")
         self.threads = []  # Для хранения активных QThread
+        self.build_widgets = {}  # Словарь для хранения виджетов сборок
         self.setup_ui()
         self.update_my_builds()
+        
+        # Таймер для автообновления
+        self.update_timer = QTimer(self)
+        self.update_timer.timeout.connect(self.auto_update_builds)
+        self.update_timer.start(2000)  # Обновление каждые 2 секунды
+        
+        # Сигналы для потокобезопасного обновления UI
+        self.request_update_builds.connect(self.update_my_builds)
+        self.request_add_build.connect(self.add_build_to_list)
+        self.request_handle_error.connect(self.handle_build_error)
+        self.request_remove_build.connect(self.remove_build)
         
         # Основной стиль вкладки
         self.setStyleSheet(f"""
@@ -435,10 +480,17 @@ class InstallationsTab(QWidget):
         self.tabs_content = QStackedWidget()
         main_layout.addWidget(self.tabs_content)
         
-        # Вкладка 'Мои сборки'
-        self.my_builds_tab = RoundedPanel()
-        my_builds_layout = QVBoxLayout(self.my_builds_tab)
-        my_builds_layout.addWidget(QLabel("Здесь будут отображаться ваши сборки", alignment=Qt.AlignmentFlag.AlignCenter))
+        # Вкладка 'Мои сборки' с прокруткой и сеткой
+        self.my_builds_tab = QWidget()
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.grid_container = QWidget()
+        self.grid_layout = QGridLayout(self.grid_container)
+        self.grid_layout.setSpacing(18)
+        self.grid_layout.setContentsMargins(18, 18, 18, 18)
+        self.scroll_area.setWidget(self.grid_container)
+        vbox = QVBoxLayout(self.my_builds_tab)
+        vbox.addWidget(self.scroll_area)
         self.tabs_content.addWidget(self.my_builds_tab)
         
         # Вкладка 'Создать сборку'
@@ -585,6 +637,14 @@ class InstallationsTab(QWidget):
         if self.version_combo.count() > 0:
             update_build_name()
 
+        # Кнопка ручного обновления списка
+        refresh_btn_layout = QHBoxLayout()
+        self.btn_refresh = QPushButton("Обновить список")
+        self.btn_refresh.clicked.connect(self.update_my_builds)
+        refresh_btn_layout.addWidget(self.btn_refresh)
+        refresh_btn_layout.addStretch()
+        main_layout.addLayout(refresh_btn_layout)
+
     def setup_create_tab(self):
         from PySide6.QtWidgets import QFileDialog
         from PySide6.QtGui import QPixmap
@@ -728,12 +788,33 @@ class InstallationsTab(QWidget):
 
     @Slot(int, str)
     def _on_progress_update(self, value, text):
-        if value < 0:
-            self.progress.setValue(0)
-            self.progress.setVisible(False)
-        else:
-            self.progress.setValue(value)
-            self.progress.setVisible(True)
+        try:
+            assert threading.current_thread() == threading.main_thread(), "_on_progress_update: UI update not in main thread!"
+            
+            logger.debug(f"[UI] Обновление прогресса: {value}% - {text}")
+            
+            # Проверяем, что прогресс-бар доступен
+            if not hasattr(self, 'progress') or not self.progress:
+                logger.warning("[UI] Прогресс-бар недоступен")
+                return
+                
+            # Обновляем прогресс-бар
+            try:
+                if value >= 0:
+                    self.progress.setValue(value)
+                    self.progress.setVisible(True)
+                else:
+                    # Отрицательное значение означает ошибку
+                    self.progress.setVisible(False)
+                    
+                # Обновляем текст статуса если есть
+                # status_label может не существовать в этом классе
+                        
+            except Exception as e:
+                logger.error(f"[UI] Ошибка обновления прогресс-бара: {e}")
+                
+        except Exception as e:
+            logger.exception(f"[UI] Критическая ошибка в _on_progress_update: {e}")
 
     def update_my_builds(self):
         from pathlib import Path

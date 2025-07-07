@@ -359,3 +359,4 @@ class SettingsTab(QWidget):
         profile_widget = getattr(mw, "profile_widget", None)
         if profile_widget is not None:
             profile_widget.nick.setText(new_nick or "Гость") 
+

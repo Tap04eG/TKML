@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt, QTranslator, QLocale
 from PySide6.QtGui import QIcon, QFont
 from loguru import logger
-import datetime
+import logging
 
 # Добавляем вывод в консоль
 # logger.add(sys.stdout, level="DEBUG", colorize=True, format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>")
@@ -21,16 +21,7 @@ sys.path.append(str(Path(__file__).parent))
 
 from ui.main_window import MainWindow
 from core.config_manager import ConfigManager
-from core.logger import setup_logger
 from utils.theme_manager import ThemeManager
-
-def handle_exception(exc_type, exc_value, exc_traceback):
-    if issubclass(exc_type, KeyboardInterrupt):
-        sys.__excepthook__(exc_type, exc_value, exc_traceback)
-        return
-    logger.exception("Необработанное исключение:", exc_info=(exc_type, exc_value, exc_traceback))
-
-sys.excepthook = handle_exception
 
 class TMKLLauncher:
     """Главный класс лаунчера TMKL"""
@@ -144,7 +135,7 @@ class TMKLLauncher:
         # Инициализируем менеджер конфигурации
         self.config_manager = ConfigManager()
         # Настраиваем логирование с путём к Minecraft
-        setup_logger(self.config_manager.get("minecraft_path"))
+        # setup_logger(self.config_manager.get("minecraft_path"))
         # Инициализируем менеджер тем
         self.theme_manager = ThemeManager(self.config_manager)
         
@@ -191,11 +182,32 @@ class TMKLLauncher:
             return 1
 
 
+def setup_logging():
+    os.makedirs("logs", exist_ok=True)
+    logger.remove()
+    logger.add("logs/launcher.log", rotation="5 MB", retention="10 days", level="DEBUG", encoding="utf-8")
+    logger.add(lambda msg: print(msg, end=""), level="INFO")
+    # Интеграция с стандартным logging
+    class InterceptHandler(logging.Handler):
+        def emit(self, record):
+            # Перенаправляем стандартные логи в loguru
+            logger_opt = logger.opt(depth=6, exception=record.exc_info)
+            logger_opt.log(record.levelname, record.getMessage())
+    logging.basicConfig(handlers=[InterceptHandler()], level=logging.DEBUG)
+
+setup_logging()
+logger.info("Приложение запущено")
+
 def main():
     """Точка входа в приложение"""
     launcher = TMKLLauncher()
     sys.exit(launcher.run())
 
+def excepthook(type, value, tb):
+    from loguru import logger
+    logger.exception("Uncaught exception", exc_info=(type, value, tb))
+    sys.__excepthook__(type, value, tb)
+sys.excepthook = excepthook
 
 if __name__ == "__main__":
     main() 

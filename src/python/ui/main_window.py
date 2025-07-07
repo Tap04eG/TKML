@@ -134,8 +134,6 @@ class MainWindow(QMainWindow):
         
         # Создание интерфейса
         self.setup_ui()
-        
-        logger.info("Главное окно инициализировано")
     
     def setup_ui(self):
         """Настройка пользовательского интерфейса"""

@@ -10,7 +10,6 @@ import platform
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 import requests
-from loguru import logger
 import xml.etree.ElementTree as ET
 import re
 from collections import defaultdict
@@ -31,8 +30,6 @@ class MinecraftManager:
         
         # API URLs
         self.version_manifest_url = "https://launchermeta.mojang.com/mc/game/version_manifest.json"
-        
-        logger.info("MinecraftManager инициализирован")
     
     def get_available_versions(self) -> List[Dict[str, Any]]:
         """Получение списка доступных версий"""
@@ -53,11 +50,9 @@ class MinecraftManager:
                 }
                 versions.append(version_data)
             
-            logger.info(f"Загружено {len(versions)} версий")
             return versions
             
         except Exception as e:
-            logger.error(f"Ошибка загрузки версий: {e}")
             return []
     
     def is_version_installed(self, version_id: str) -> bool:
@@ -68,8 +63,6 @@ class MinecraftManager:
     def download_version(self, version_id: str, progress_callback=None) -> bool:
         """Загрузка версии Minecraft (упрощенная версия)"""
         try:
-            logger.info(f"Начинаем загрузку версии {version_id}")
-            
             # Создаем директорию для версии
             version_dir = self.versions_path / version_id
             version_dir.mkdir(exist_ok=True)
@@ -77,11 +70,9 @@ class MinecraftManager:
             if progress_callback:
                 progress_callback(f"Версия {version_id} загружена")
             
-            logger.info(f"Версия {version_id} успешно загружена")
             return True
             
         except Exception as e:
-            logger.error(f"Ошибка загрузки версии {version_id}: {e}")
             return False
     
     def find_java(self) -> Optional[str]:
@@ -103,16 +94,11 @@ class MinecraftManager:
             # Находим Java
             java_path = self.find_java()
             if not java_path:
-                logger.error("Java не найдена")
                 return False
             
-            logger.info(f"Запуск Minecraft версии {version_id} для пользователя {username}")
-            
-            # Здесь будет полная логика запуска
             return True
             
         except Exception as e:
-            logger.error(f"Ошибка запуска Minecraft: {e}")
             return False
     
     def get_fabric_loader_versions(self, minecraft_version: str) -> list:
@@ -125,7 +111,6 @@ class MinecraftManager:
             # Версии идут от новых к старым, берём только loader.version
             return [entry["loader"]["version"] for entry in data if "loader" in entry]
         except Exception as e:
-            logger.error(f"Ошибка загрузки версий Fabric Loader для {minecraft_version}: {e}")
             return []
     
     def get_forge_loader_versions(self, minecraft_version: str) -> list:
@@ -156,7 +141,6 @@ class MinecraftManager:
             result = [v + labeled_versions.get(v, "") for v in versions_sorted]
             return result if result else []
         except Exception as e:
-            logger.error(f"Ошибка загрузки версий Forge для {minecraft_version}: {e}")
             return []
     
     def get_quilt_loader_versions(self, minecraft_version: str) -> list:
@@ -195,7 +179,6 @@ class MinecraftManager:
                 result.extend(rel + others_sorted)
             return result if result else []
         except Exception as e:
-            logger.error(f"Ошибка загрузки версий Quilt Loader для {minecraft_version}: {e}")
             return []
     
     def get_neoforge_loader_versions(self, minecraft_version: str) -> list:
@@ -214,7 +197,6 @@ class MinecraftManager:
                 return filtered_sorted if filtered_sorted else []
             return []
         except Exception as e:
-            logger.error(f"Ошибка загрузки версий NeoForge для {minecraft_version}: {e}")
             return []
     
     def get_paper_versions(self, minecraft_version: str) -> list:
@@ -225,7 +207,6 @@ class MinecraftManager:
             data = response.json()
             return [str(b) for b in data.get("builds", [])]
         except Exception as e:
-            logger.error(f"Ошибка загрузки версий Paper для {minecraft_version}: {e}")
             return []
     
     def get_purpur_versions(self, minecraft_version: str) -> list:
@@ -236,5 +217,4 @@ class MinecraftManager:
             data = response.json()
             return [str(b) for b in data.get("builds", [])]
         except Exception as e:
-            logger.error(f"Ошибка загрузки версий Purpur для {minecraft_version}: {e}")
             return [] 
