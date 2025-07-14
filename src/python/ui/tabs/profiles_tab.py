@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget, QListWidgetItem,
     QLineEdit, QMessageBox, QInputDialog, QSizePolicy, QDialog, QDialogButtonBox
 )
-from PySide6.QtGui import QPixmap, QIcon, QColor
+from PySide6.QtGui import QPixmap, QColor
 from PySide6.QtCore import Qt, QSize
 import requests
 
@@ -123,7 +123,7 @@ class ProfilesTab(QWidget):
         for nick in profiles:
             item = QListWidgetItem(nick)
             pixmap = get_avatar_pixmap(nick)
-            item.setIcon(QIcon(pixmap))
+            item.setIcon(pixmap)
             if nick == active:
                 item.setBackground(QColor("cyan"))
                 item.setText(f"{nick} (активен)")

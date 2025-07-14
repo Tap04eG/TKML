@@ -607,7 +607,6 @@ class BuildManager:
                 "type": "custom",
                 "created": time.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
                 "lastUsed": time.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
-                "icon": "Grass",
                 "lastVersionId": version_id,
                 "gameDir": str(instance_dir / ".minecraft"),
                 "javaDir": self.config_manager.get("java_path", "auto"),
@@ -642,7 +641,6 @@ class BuildManager:
                 "created": time.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
                 "last_used": time.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
                 "notes": build_config.get("notes", ""),
-                "icon": "Grass"
             }
             
             config_file = instance_dir / "instance.cfg"

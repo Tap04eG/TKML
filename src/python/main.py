@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt, QTranslator, QLocale
-from PySide6.QtGui import QIcon, QFont
+from PySide6.QtGui import QFont
 from loguru import logger
 import logging
 
@@ -40,11 +40,6 @@ class TMKLLauncher:
         self.app.setApplicationName("TMKL - The Minecraft Launcher")
         self.app.setApplicationVersion("1.0.0")
         self.app.setOrganizationName("TMKL Team")
-        
-        # Устанавливаем иконку приложения
-        icon_path = Path(__file__).parent.parent.parent / "resources" / "icons" / "launcher.ico"
-        if icon_path.exists():
-            self.app.setWindowIcon(QIcon(str(icon_path)))
         
         # Настраиваем шрифт
         font = QFont("Segoe UI", 9)

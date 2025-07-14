@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect, QProgressBar, QButtonGroup, QStackedWidget, QFileDialog, QTextEdit
 )
 from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve, QTimer, QObject, QRectF, Slot, QThread
-from PySide6.QtGui import QIcon, QPainter, QBrush, QColor, QPen, QFont, QPixmap
+from PySide6.QtGui import QPainter, QBrush, QColor, QPen, QFont, QPixmap
 import os
 import json
 import urllib.request
@@ -19,6 +19,7 @@ import subprocess
 import platform
 import glob
 import uuid
+from loguru import logger
 
 # Цвета из CSS
 MC_DARK_GREEN = "#2d6135"
@@ -44,27 +45,7 @@ MC_PIXEL = "rgba(0, 0, 0, 0.15)"
 VERSION_TYPES = ["release", "snapshot", "beta", "alpha"]
 TYPE_LABELS = {"release": "Release", "snapshot": "Snapshot", "beta": "Beta", "alpha": "Alpha"}
 
-ICON_PATHS = {
-    "release": "src/python/ui/icons/release.svg",
-    "snapshot": "src/python/ui/icons/snapshot.svg",
-    "beta": "src/python/ui/icons/beta.svg",
-    "alpha": "src/python/ui/icons/alpha.svg"
-}
-
 MOJANG_MANIFEST_URL = "https://launchermeta.mojang.com/mc/game/version_manifest.json"
-
-def get_icon(version_type):
-    try:
-        if not version_type:
-            return QIcon()
-            
-        path = ICON_PATHS.get(str(version_type))
-        if path and os.path.exists(path):
-            return QIcon(path)
-        return QIcon()  # Пустая иконка-заглушка
-    except Exception as e:
-        logger.error(f"[UI] Ошибка получения иконки для {version_type}: {e}")
-        return QIcon()  # Пустая иконка-заглушка
 
 class VersionCard(QFrame):
     installed_signal = Signal(dict)
@@ -140,11 +121,6 @@ class VersionCard(QFrame):
             layout = QHBoxLayout(self)
             layout.setContentsMargins(12, 12, 12, 12)
             layout.setSpacing(15)
-            
-            # Иконка версии
-            icon = QLabel()
-            icon.setPixmap(get_icon(version["type"]).pixmap(48, 48))
-            layout.addWidget(icon)
             
             # Информация о версии
             info = QVBoxLayout()
@@ -278,9 +254,6 @@ class InstalledVersionWidget(QWidget):
         """)
         # Название и иконка
         title_layout = QHBoxLayout()
-        icon = QLabel()
-        icon.setPixmap(get_icon(self.version.get('type', 'release')).pixmap(32, 32))
-        title_layout.addWidget(icon)
         title = QLabel(f"<b>{self.build_name}</b>")
         title.setStyleSheet("font-size: 16px; color: #fff;")
         title_layout.addWidget(title)
@@ -436,20 +409,34 @@ class InstallationsTab(QWidget):
                 margin-bottom: 8px;
                 text-align: left;
                 font-weight: 500;
-                transition: background 0.2s, color 0.2s;
             }}
             QPushButton.sidebar-tab:checked {{
                 background: {MC_BLUE};
                 color: {MC_TEXT_LIGHT};
                 border: 2px solid {MC_BLUE};
                 font-weight: bold;
-                box-shadow: 0 0 8px 2px rgba(58,125,207,0.25);
             }}
             QPushButton.sidebar-tab:hover {{
                 background: {MC_GREEN};
                 color: {MC_TEXT_LIGHT};
             }}
         """)
+
+    def handle_build_error(self, build_name, error_message):
+        """Stub for handling build errors. Implement logic if needed. Arguments are likely build name/id and error message."""
+        pass
+
+    def add_build_to_list(self, build_info):
+        """Stub for adding a build to the list. Implement logic if needed. Argument is likely a dict with build info."""
+        pass
+
+    def auto_update_builds(self):
+        """Stub for auto-update builds. Implement logic if needed."""
+        pass
+
+    def remove_build(self, build_info):
+        """Stub for removing a build from the list. Implement logic if needed. Argument is likely a dict with build info."""
+        pass
 
     def setup_ui(self):
         main_layout = QHBoxLayout(self)
@@ -636,14 +623,6 @@ class InstallationsTab(QWidget):
         # Инициализируем название при загрузке
         if self.version_combo.count() > 0:
             update_build_name()
-
-        # Кнопка ручного обновления списка
-        refresh_btn_layout = QHBoxLayout()
-        self.btn_refresh = QPushButton("Обновить список")
-        self.btn_refresh.clicked.connect(self.update_my_builds)
-        refresh_btn_layout.addWidget(self.btn_refresh)
-        refresh_btn_layout.addStretch()
-        main_layout.addLayout(refresh_btn_layout)
 
     def setup_create_tab(self):
         from PySide6.QtWidgets import QFileDialog
@@ -926,11 +905,6 @@ class InstallationsTab(QWidget):
                     "color: white;"
                     "font-weight: bold;"
                     "border: none;"
-                    "transition: background 0.2s, box-shadow 0.2s;"
-                    "}"
-                    "QPushButton#playBtn:hover {"
-                    "background: #2d6135;"
-                    "box-shadow: 0 0 12px 2px rgba(58,125,68,0.25);"
                     "}"
                 )
                 def launch_selected_build():
@@ -1106,11 +1080,6 @@ class InstallationsTab(QWidget):
                     "color: white;"
                     "font-weight: bold;"
                     "border: none;"
-                    "transition: background 0.2s, box-shadow 0.2s;"
-                    "}"
-                    "QPushButton#settingsBtn:hover {"
-                    "background: #2d5ca6;"
-                    "box-shadow: 0 0 12px 2px rgba(58,125,207,0.18);"
                     "}"
                 )
                 settings_btn.clicked.connect(lambda _, b=build: print(f'Настройки: {b}'))

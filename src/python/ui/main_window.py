@@ -168,14 +168,12 @@ class MainWindow(QMainWindow):
                 margin-bottom: 8px;
                 text-align: left;
                 font-weight: 500;
-                transition: background 0.2s, color 0.2s;
             }}
             QPushButton[sidebar="true"]:checked {{
                 background: {MC_BLUE};
                 color: {MC_TEXT_LIGHT};
                 border: 2px solid {MC_BLUE};
                 font-weight: bold;
-                box-shadow: 0 0 8px 2px rgba(58,125,207,0.25);
             }}
             QPushButton[sidebar="true"]:hover {{
                 background: {MC_GREEN};
