@@ -6,13 +6,17 @@
 import os
 import json
 import shutil
-import requests
 import threading
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Callable, Union
 from enum import Enum
-from loguru import logger
+import traceback
+import tempfile
+
+from services.download_service import DownloadService
+from services.cache_service import CacheService
+from services.log_service import LogService
 
 
 class BuildStatus(Enum):
@@ -76,8 +80,8 @@ class BuildManager:
         print('create_build called, log_callback:', log_callback)
         if log_callback:
             log_callback(f"[BuildManager] Начато создание сборки: {build_config}")
-        logger.info(f"Вызван create_build с конфигом: {build_config}")
-        logger.info(f"[BuildManager] Начато создание сборки: {build_config}")
+        LogService.log('INFO', f"Вызван create_build с конфигом: {build_config}")
+        LogService.log('INFO', f"[BuildManager] Начато создание сборки: {build_config}")
         try:
             build_name = build_config.get("name", "Unnamed Build")
             minecraft_version = build_config.get("minecraft_version")
@@ -85,7 +89,7 @@ class BuildManager:
             loader_version = build_config.get("loader_version")
             if log_callback:
                 log_callback(f"Параметры: name={build_name}, version={minecraft_version}, loader={loader}, loader_version={loader_version}")
-            logger.debug(f"[BuildManager] Параметры: name={build_name}, version={minecraft_version}, loader={loader}, loader_version={loader_version}")
+            LogService.log('DEBUG', f"[BuildManager] Параметры: name={build_name}, version={minecraft_version}, loader={loader}, loader_version={loader_version}")
             if log_callback:
                 log_callback(f"Создаём директорию для сборки: {build_name}")
             if progress_callback:
@@ -155,10 +159,10 @@ class BuildManager:
                 log_callback(f"Сборка создана успешно!")
             if progress_callback:
                 progress_callback(100, "Сборка создана успешно!")
-            logger.success(f"[BuildManager] Сборка '{build_name}' успешно создана")
+            LogService.log('INFO', f"[BuildManager] Сборка '{build_name}' успешно создана")
             return True
         except Exception as e:
-            logger.exception(f"[BuildManager] Ошибка создания сборки: {e}")
+            LogService.log('ERROR', f"[BuildManager] Ошибка создания сборки: {e}", stack=traceback.format_exc())
             if log_callback:
                 log_callback(f"Ошибка создания сборки: {e}")
             if progress_callback:
@@ -178,20 +182,20 @@ class BuildManager:
     def _download_minecraft_version(self, version: str, progress_callback: Optional[Callable] = None, log_callback: Optional[Callable] = None) -> bool:
         if log_callback:
             log_callback(f"Начало загрузки Minecraft версии: {version}")
-        logger.info(f"Попытка скачать Minecraft версию: {version}")
-        logger.info(f"[BuildManager] Начало загрузки версии Minecraft: {version}")
+        LogService.log('INFO', f"Попытка скачать Minecraft версию: {version}")
+        LogService.log('INFO', f"[BuildManager] Начало загрузки версии Minecraft: {version}")
 
         try:
-            logger.info(f"[BUILD] Начало загрузки Minecraft версии: {version}")
+            LogService.log('INFO', f"[BUILD] Начало загрузки Minecraft версии: {version}")
             version_dir = self.versions_path / version
             
             if version_dir.exists():
                 if log_callback:
                     log_callback(f"Версия {version} уже существует: {version_dir}")
-                logger.info(f"Версия {version} уже существует")
+                LogService.log('INFO', f"Версия {version} уже существует")
                 return True
                 
-            logger.debug(f"[BUILD] Получение информации о версии {version}")
+            LogService.log('DEBUG', f"[BUILD] Получение информации о версии {version}")
             version_info = self._get_version_info(version)
             
             if not version_info:
@@ -199,65 +203,63 @@ class BuildManager:
                     log_callback(f"Не удалось получить информацию о версии: {version}")
                 return False
                 
-            logger.debug(f"[BUILD] Информация о версии получена: {version_info.keys()}")
+            LogService.log('DEBUG', f"[BUILD] Информация о версии получена: {version_info.keys()}")
+            
+            # Сохраняем JSON-файл версии в папку версии
+            try:
+                version_dir.mkdir(parents=True, exist_ok=True)  # Гарантируем, что папка существует
+                version_json_path = version_dir / f"{version}.json"
+                with open(version_json_path, "w", encoding="utf-8") as f:
+                    json.dump(version_info, f, indent=2, ensure_ascii=False)
+                LogService.log('INFO', f"[BUILD] JSON-файл версии сохранён: {version_json_path}")
+                if log_callback:
+                    log_callback(f"JSON-файл версии сохранён: {version_json_path}")
+            except Exception as e:
+                LogService.log('ERROR', f"[BUILD] Ошибка сохранения JSON-файла версии: {e}", stack=traceback.format_exc())
+                if log_callback:
+                    log_callback(f"Ошибка сохранения JSON-файла версии: {e}")
+                return False
+
+            # Скачиваем библиотеки для Vanilla
+            libraries = version_info.get("libraries", [])
+            if libraries:
+                LogService.log('INFO', f"[BUILD] Начинаю скачивание {len(libraries)} библиотек для Vanilla")
+                self._download_libraries(libraries, progress_callback, log_callback)
             
             client_url = version_info.get("downloads", {}).get("client", {}).get("url")
             if not client_url:
                 if log_callback:
                     log_callback(f"URL клиента не найден для версии {version}")
-                logger.error(f"URL клиента не найден для версии {version}")
+                LogService.log('ERROR', f"URL клиента не найден для версии {version}")
                 return False
                 
-            logger.info(f"[BUILD] URL клиента найден: {client_url}")
+            LogService.log('INFO', f"[BUILD] URL клиента найден: {client_url}")
             client_path = version_dir / f"{version}.jar"
             if log_callback:
                 log_callback(f"Скачивание Minecraft client: {client_url} → {client_path}")
-            logger.info({
-                "event": "download_mc_attempt",
-                "filename": f"{version}.jar",
-                "dst": str(client_path),
-                "src": client_url,
-                "msg": "Начинаю загрузку Minecraft client"
-            })
+            LogService.log('INFO', f"[download_mc_attempt] filename={version}.jar dst={client_path} src={client_url}")
 
             try:
                 version_dir.mkdir(parents=True, exist_ok=True)
-                logger.debug(f"[BUILD] Начало загрузки клиента в: {client_path}")
-                response = requests.get(client_url, stream=True, timeout=30)
-                response.raise_for_status()
-                
-                total_size = int(response.headers.get('content-length', 0))
-                logger.info(f"[BUILD] Размер клиента: {total_size} байт")
-                
-                with open(client_path, 'wb') as f:
-                    downloaded = 0
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
+                LogService.log('DEBUG', f"[BUILD] Начало загрузки клиента в: {client_path}")
+                response = DownloadService().download_file_sync(client_url, client_path, progress_callback)
+                if not response:
+                    if log_callback:
+                        log_callback(f"Ошибка загрузки Minecraft client: {response}")
+                    LogService.log('ERROR', f"[download_mc_error] filename={version}.jar dst={client_path} src={client_url} msg={response}")
+                    return False
                 if log_callback:
                     log_callback(f"Minecraft client успешно загружен: {client_path}")
-                logger.info({
-                    "event": "download_mc",
-                    "filename": f"{version}.jar",
-                    "dst": str(client_path),
-                    "src": client_url,
-                    "msg": "Minecraft client успешно загружен"
-                })
+                LogService.log('INFO', f"[download_mc] filename={version}.jar dst={client_path} src={client_url}")
             except Exception as e:
                 if log_callback:
                     log_callback(f"Ошибка загрузки Minecraft client: {e}")
-                logger.error({
-                    "event": "download_mc_error",
-                    "filename": f"{version}.jar",
-                    "dst": str(client_path),
-                    "src": client_url,
-                    "msg": f"Ошибка загрузки Minecraft client: {e}"
-                })
+                LogService.log('ERROR', f"[download_mc_error] filename={version}.jar dst={client_path} src={client_url} msg={e}")
                 return False
-            logger.success(f"[BuildManager] Версия Minecraft {version} успешно загружена")
+            LogService.log('INFO', f"[BuildManager] Версия Minecraft {version} успешно загружена")
             return True
         except Exception as e:
-            logger.exception(f"[BuildManager] Ошибка загрузки версии Minecraft {version}")
+            LogService.log('ERROR', f"[BuildManager] Ошибка загрузки версии Minecraft {version}: {e}", stack=traceback.format_exc())
             if log_callback:
                 log_callback(f"Ошибка загрузки версии Minecraft {version}: {e}")
             return False
@@ -265,109 +267,135 @@ class BuildManager:
     def _get_version_info(self, version: str) -> Optional[Dict[str, Any]]:
         """Получение информации о версии"""
         try:
-            logger.debug(f"[BUILD] Получение информации о версии {version}")
-            
+            LogService.log('DEBUG', f"[BUILD] Получение информации о версии {version}")
             # Сначала пробуем получить из манифеста
             manifest_url = "https://launchermeta.mojang.com/mc/game/version_manifest.json"
-            logger.debug(f"[BUILD] Загрузка манифеста: {manifest_url}")
-            
-            response = requests.get(manifest_url, timeout=30)
-            response.raise_for_status()
-            
-            manifest = response.json()
-            logger.debug(f"[BUILD] Манифест загружен, версий в манифесте: {len(manifest.get('versions', []))}")
-            
+            LogService.log('DEBUG', f"[BUILD] Загрузка манифеста: {manifest_url}")
+            with tempfile.NamedTemporaryFile(delete=False) as tmp_manifest:
+                if not DownloadService().download_file_sync(manifest_url, Path(tmp_manifest.name)):
+                    LogService.log('ERROR', f"[BUILD] Не удалось скачать манифест версий")
+                    return None
+                manifest = json.load(open(tmp_manifest.name, 'r', encoding='utf-8'))
+            LogService.log('DEBUG', f"[BUILD] Манифест загружен, версий в манифесте: {len(manifest.get('versions', []))}")
             version_info = None
-            
             for v in manifest.get("versions", []):
                 if v["id"] == version:
-                    logger.debug(f"[BUILD] Найдена версия {version} в манифесте")
-                    # Получаем детальную информацию о версии
+                    LogService.log('DEBUG', f"[BUILD] Найдена версия {version} в манифесте")
                     version_url = v["url"]
-                    logger.debug(f"[BUILD] Загрузка детальной информации: {version_url}")
-                    
-                    version_response = requests.get(version_url, timeout=30)
-                    version_response.raise_for_status()
-                    version_info = version_response.json()
-                    logger.debug(f"[BUILD] Детальная информация получена: {version_info.keys()}")
+                    LogService.log('DEBUG', f"[BUILD] Загрузка детальной информации: {version_url}")
+                    with tempfile.NamedTemporaryFile(delete=False) as tmp_version:
+                        if not DownloadService().download_file_sync(version_url, Path(tmp_version.name)):
+                            LogService.log('ERROR', f"[BUILD] Не удалось скачать детальную информацию о версии")
+                            return None
+                        version_info = json.load(open(tmp_version.name, 'r', encoding='utf-8'))
+                    LogService.log('DEBUG', f"[BUILD] Детальная информация получена: {list(version_info.keys())}")
                     break
-            
             if version_info is None:
-                logger.error(f"[BUILD] Версия {version} не найдена в манифесте")
-                # Выводим доступные версии для отладки
+                LogService.log('ERROR', f"[BUILD] Версия {version} не найдена в манифесте")
                 available_versions = [v["id"] for v in manifest.get("versions", [])[:10]]
-                logger.debug(f"[BUILD] Первые 10 доступных версий: {available_versions}")
-            
+                LogService.log('DEBUG', f"[BUILD] Первые 10 доступных версий: {available_versions}")
             return version_info
-            
         except Exception as e:
-            logger.exception(f"[BUILD] Ошибка получения информации о версии {version}: {e}")
+            LogService.log('ERROR', f"[BUILD] Ошибка получения информации о версии {version}: {e}", stack=traceback.format_exc())
             return None
     
     def _download_file(self, url: str, file_path: Path, progress_callback: Optional[Callable] = None, index: Optional[int] = None, total: Optional[int] = None) -> bool:
         try:
-            logger.debug(f"[BUILD] Начало загрузки файла: {url} -> {file_path}")
+            LogService.log('DEBUG', f"[BUILD] Начало загрузки файла: {url} -> {file_path}")
             file_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # Проверяем, существует ли файл
             if file_path.exists():
-                logger.debug(f"[BUILD] Файл уже существует: {file_path}")
+                LogService.log('DEBUG', f"[BUILD] Файл уже существует: {file_path}")
                 return True
-                
-            response = requests.get(url, stream=True, timeout=30)
-            response.raise_for_status()
-            total_size = int(response.headers.get('content-length', 0))
-            downloaded = 0
-            
-            logger.debug(f"[BUILD] Размер файла: {total_size} байт")
-            
-            with open(file_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if total_size > 0 and progress_callback:
-                            try:
-                                progress = int((downloaded / total_size) * 100)
-                                progress_callback(progress, f"Загрузка {file_path.name}...")
-                            except Exception as e:
-                                logger.error(f"[BUILD] Ошибка в progress_callback при загрузке {file_path.name}: {e}")
-            
-            logger.debug(f"[BUILD] Файл успешно загружен: {file_path}")
-            return True
-            
+            result = DownloadService().download_file_sync(url, file_path, progress_callback)
+            if result:
+                LogService.log('DEBUG', f"[BUILD] Файл успешно загружен: {file_path}")
+            else:
+                LogService.log('ERROR', f"[BUILD] Ошибка загрузки файла {url}", stack=traceback.format_exc())
+            return result
         except Exception as e:
-            logger.error(f"[BUILD] Ошибка загрузки файла {url}: {e}")
-            # Удаляем частично загруженный файл
-            try:
-                if file_path.exists():
-                    file_path.unlink()
-            except:
-                pass
+            LogService.log('ERROR', f"[BUILD] Ошибка загрузки файла {url}: {e}", stack=traceback.format_exc())
             return False
     
-    def _download_libraries(self, libraries: List[Dict], progress_callback: Optional[Callable] = None) -> bool:
-        try:
-            logger.debug(f"[BUILD] Начало загрузки библиотек, всего: {len(libraries)}")
-            total = len(libraries)
-            successful_downloads = 0
+    def _is_library_needed(self, library: Dict, current_os: str) -> bool:
+        """
+        Проверяет, нужна ли библиотека для текущей ОС на основе правил
+        """
+        rules = library.get("rules", [])
+        if not rules:
+            return True  # если нет правил - нужна всегда
             
-            for i, library in enumerate(libraries):
+        for rule in rules:
+            action = rule.get("action", "allow")
+            os_rule = rule.get("os", {})
+            
+            # Проверяем ОС
+            if "name" in os_rule:
+                rule_os = os_rule["name"]
+                if rule_os == current_os:
+                    # Библиотека для нашей ОС
+                    if action == "allow":
+                        return True
+                    elif action == "disallow":
+                        return False
+                else:
+                    # Библиотека для другой ОС
+                    if action == "allow":
+                        return False
+                    elif action == "disallow":
+                        return True
+                        
+            # Проверяем архитектуру (если указана)
+            if "arch" in os_rule:
+                import platform
+                current_arch = platform.machine().lower()
+                rule_arch = os_rule["arch"]
+                
+                if current_arch == rule_arch:
+                    if action == "allow":
+                        return True
+                    elif action == "disallow":
+                        return False
+                else:
+                    if action == "allow":
+                        return False
+                    elif action == "disallow":
+                        return True
+        
+        # Если правила не сработали - библиотека нужна
+        return True
+
+    def _download_libraries(self, libraries: List[Dict], progress_callback: Optional[Callable] = None, log_callback: Optional[Callable] = None) -> bool:
+        try:
+            LogService.log('DEBUG', f"[BUILD] Начало загрузки библиотек, всего: {len(libraries)}")
+            if log_callback:
+                log_callback(f"Начинаем загрузку {len(libraries)} библиотек")
+            
+            # Определяем текущую ОС
+            import platform
+            current_os = platform.system().lower()
+            if current_os == "windows":
+                current_os = "windows"
+            elif current_os == "linux":
+                current_os = "linux" 
+            elif current_os == "darwin":
+                current_os = "osx"
+            else:
+                current_os = "windows"  # fallback
+                
+            LogService.log('DEBUG', f"[BUILD] Текущая ОС: {current_os}")
+            
+            # Подготавливаем список файлов для скачивания
+            files_to_download = []
+            for library in libraries:
                 try:
-                    if progress_callback:
-                        try:
-                            progress = 25 + int((i / total) * 10)  # 25-35%
-                            progress_callback(progress, f"Загрузка библиотеки {i+1}/{total}...")
-                        except Exception as e:
-                            logger.error(f"[BUILD] Ошибка в progress_callback при загрузке библиотек: {e}")
-                            
-                    if "rules" in library:
-                        logger.debug(f"[BUILD] Пропускаем библиотеку с правилами: {library}")
+                    # Проверяем правила библиотеки
+                    if not self._is_library_needed(library, current_os):
+                        LogService.log('DEBUG', f"[BUILD] Библиотека не нужна для {current_os}: {library.get('name', 'unknown')}")
                         continue
                         
                     artifact = library.get("downloads", {}).get("artifact")
                     if not artifact:
-                        logger.debug(f"[BUILD] Библиотека без артефакта: {library}")
+                        LogService.log('DEBUG', f"[BUILD] Библиотека без артефакта: {library}")
                         continue
                         
                     url = artifact.get("url")
@@ -375,24 +403,52 @@ class BuildManager:
                     
                     if url and path:
                         lib_path = self.libraries_path / path
-                        logger.debug(f"[BUILD] Загрузка библиотеки: {path}")
-                        
-                        if self._download_file(url, lib_path, progress_callback, index=i+1, total=total):
-                            successful_downloads += 1
-                        else:
-                            logger.error(f"[BUILD] Не удалось загрузить библиотеку: {path}")
+                        files_to_download.append((url, lib_path))
                     else:
-                        logger.warning(f"[BUILD] Библиотека без URL или пути: {library}")
+                        LogService.log('WARNING', f"[BUILD] Библиотека без URL или пути: {library}")
                         
                 except Exception as e:
-                    logger.error(f"[BUILD] Ошибка при обработке библиотеки {i}: {e}")
+                    LogService.log('ERROR', f"[BUILD] Ошибка при обработке библиотеки: {e}", stack=traceback.format_exc())
                     continue
-                    
-            logger.info(f"[BUILD] Загрузка библиотек завершена: {successful_downloads}/{total} успешно")
-            return successful_downloads > 0  # Возвращаем True если хотя бы одна библиотека загружена
+            
+            if not files_to_download:
+                LogService.log('INFO', f"[BUILD] Нет файлов для скачивания")
+                if log_callback:
+                    log_callback("Нет файлов для скачивания")
+                return True
+            
+            # Используем многопоточное скачивание
+            download_service = DownloadService(self.config_manager)
+            
+            def progress_wrapper(current: int, total: int, message: str):
+                if progress_callback:
+                    try:
+                        progress = 25 + int((current / total) * 10)  # 25-35%
+                        progress_callback(progress, f"Загрузка библиотек: {current}/{total} - {message}")
+                    except Exception as e:
+                        LogService.log('ERROR', f"[BUILD] Ошибка в progress_callback: {e}", stack=traceback.format_exc())
+            
+            def log_wrapper(message: str):
+                if log_callback:
+                    try:
+                        log_callback(message)
+                    except Exception as e:
+                        LogService.log('ERROR', f"[BUILD] Ошибка в log_callback: {e}", stack=traceback.format_exc())
+                LogService.log('INFO', f"[BUILD] {message}")
+            
+            result = download_service.download_multiple_files(
+                files_to_download, 
+                progress_callback=progress_wrapper,
+                log_callback=log_wrapper
+            )
+            
+            LogService.log('INFO', f"[BUILD] Загрузка библиотек завершена: {'успешно' if result else 'с ошибками'}")
+            return result
             
         except Exception as e:
-            logger.exception(f"[BUILD] Критическая ошибка при загрузке библиотек: {e}")
+            LogService.log('ERROR', f"[BUILD] Критическая ошибка при загрузке библиотек: {e}", stack=traceback.format_exc())
+            if log_callback:
+                log_callback(f"Критическая ошибка при загрузке библиотек: {e}")
             return False
     
     def _download_assets(self, version_info: Dict[str, Any], progress_callback: Optional[Callable] = None) -> bool:
@@ -406,10 +462,10 @@ class BuildManager:
             assets_dir.mkdir(parents=True, exist_ok=True)
             asset_path = assets_dir / f"{id_}.json"
             try:
-                response = requests.get(url, timeout=30)
-                response.raise_for_status()
-                with open(asset_path, 'wb') as f:
-                    f.write(response.content)
+                response = DownloadService().download_file_sync(url, asset_path, progress_callback)
+                if not response:
+                    LogService.log('ERROR', f"[BUILD] Не удалось скачать ассет индекс {id_}", stack=traceback.format_exc())
+                    return False
                 return True
             except Exception as e:
                 return False
@@ -417,7 +473,7 @@ class BuildManager:
             return False
     
     def _install_loader(self, minecraft_version: str, loader: str, loader_version: str, progress_callback: Optional[Callable] = None, log_callback: Optional[Callable] = None) -> bool:
-        logger.info(f"Начинаю установку лоадера: {loader} {loader_version} для {minecraft_version}")
+        LogService.log('INFO', f"Начинаю установку лоадера: {loader} {loader_version} для {minecraft_version}")
         try:
             if loader == "Fabric":
                 return self._install_fabric(minecraft_version, loader_version, progress_callback, log_callback)
@@ -436,7 +492,7 @@ class BuildManager:
             return False
     
     def _install_fabric(self, minecraft_version: str, loader_version: str, progress_callback: Optional[Callable] = None, log_callback: Optional[Callable] = None) -> bool:
-        logger.info(f"Установка Fabric: {minecraft_version} {loader_version}")
+        LogService.log('INFO', f"Установка Fabric: {minecraft_version} {loader_version}")
         try:
             if log_callback:
                 log_callback(f"Установка Fabric: {minecraft_version} {loader_version}")
@@ -444,20 +500,22 @@ class BuildManager:
                 try:
                     progress_callback(45, "Установка Fabric...")
                 except Exception as e:
-                    logger.error(f"[BUILD] Ошибка в progress_callback при установке Fabric: {e}")
+                    LogService.log('ERROR', f"[BUILD] Ошибка в progress_callback при установке Fabric: {e}", stack=traceback.format_exc())
             
             # Получаем URL для Fabric
             url = f"https://meta.fabricmc.net/v2/versions/loader/{minecraft_version}/{loader_version}/profile/json"
-            logger.debug(f"[BUILD] Fabric URL: {url}")
+            LogService.log('DEBUG', f"[BUILD] Fabric URL: {url}")
             
             # Загружаем профиль Fabric
             try:
-                response = requests.get(url, timeout=30)
-                response.raise_for_status()
-                fabric_profile = response.json()
-                logger.debug(f"[BUILD] Fabric профиль получен успешно")
+                response = DownloadService().download_file_sync(url, self.temp_path / f"fabric-loader-{loader_version}-{minecraft_version}.json", progress_callback)
+                if not response:
+                    LogService.log('ERROR', f"[BUILD] Не удалось скачать профиль Fabric", stack=traceback.format_exc())
+                    return False
+                fabric_profile = json.load(open(self.temp_path / f"fabric-loader-{loader_version}-{minecraft_version}.json", 'r', encoding='utf-8'))
+                LogService.log('DEBUG', f"[BUILD] Fabric профиль получен успешно")
             except Exception as e:
-                logger.error(f"[BUILD] Ошибка получения Fabric профиля: {e}")
+                LogService.log('ERROR', f"[BUILD] Ошибка получения Fabric профиля: {e}", stack=traceback.format_exc())
                 return False
             
             # Сохраняем профиль
@@ -468,33 +526,33 @@ class BuildManager:
                 
                 with open(profile_path, 'w', encoding='utf-8') as f:
                     json.dump(fabric_profile, f, indent=2)
-                logger.debug(f"[BUILD] Fabric профиль сохранен: {profile_path}")
+                LogService.log('DEBUG', f"[BUILD] Fabric профиль сохранен: {profile_path}")
             except Exception as e:
-                logger.error(f"[BUILD] Ошибка сохранения Fabric профиля: {e}")
+                LogService.log('ERROR', f"[BUILD] Ошибка сохранения Fabric профиля: {e}", stack=traceback.format_exc())
                 return False
             
             # Загружаем библиотеки Fabric
             try:
                 libraries = fabric_profile.get("libraries", [])
-                logger.debug(f"[BUILD] Найдено библиотек Fabric: {len(libraries)}")
+                LogService.log('DEBUG', f"[BUILD] Найдено библиотек Fabric: {len(libraries)}")
                 
-                if not self._download_libraries(libraries, progress_callback):
-                    logger.error(f"[BUILD] Ошибка загрузки библиотек Fabric")
+                if not self._download_libraries(libraries, progress_callback, log_callback):
+                    LogService.log('ERROR', f"[BUILD] Ошибка загрузки библиотек Fabric", stack=traceback.format_exc())
                     return False
                     
-                logger.info(f"[BUILD] Fabric успешно установлен")
+                LogService.log('INFO', f"[BUILD] Fabric успешно установлен")
                 return True
                 
             except Exception as e:
-                logger.error(f"[BUILD] Ошибка загрузки библиотек Fabric: {e}")
+                LogService.log('ERROR', f"[BUILD] Ошибка загрузки библиотек Fabric: {e}", stack=traceback.format_exc())
                 return False
             
         except Exception as e:
-            logger.exception(f"[BUILD] Критическая ошибка при установке Fabric: {e}")
+            LogService.log('ERROR', f"[BUILD] Критическая ошибка при установке Fabric: {e}", stack=traceback.format_exc())
             return False
     
     def _install_forge(self, minecraft_version: str, forge_version: str, progress_callback: Optional[Callable] = None, log_callback: Optional[Callable] = None) -> bool:
-        logger.info(f"Установка Forge: {minecraft_version} {forge_version}")
+        LogService.log('INFO', f"Установка Forge: {minecraft_version} {forge_version}")
         try:
             if log_callback:
                 log_callback(f"Установка Forge: {minecraft_version} {forge_version}")
@@ -515,7 +573,7 @@ class BuildManager:
             return False
     
     def _install_quilt(self, minecraft_version: str, loader_version: str, progress_callback: Optional[Callable] = None, log_callback: Optional[Callable] = None) -> bool:
-        logger.info(f"Установка Quilt: {minecraft_version} {loader_version}")
+        LogService.log('INFO', f"Установка Quilt: {minecraft_version} {loader_version}")
         try:
             if log_callback:
                 log_callback(f"Установка Quilt: {minecraft_version} {loader_version}")
@@ -526,10 +584,11 @@ class BuildManager:
             url = f"https://meta.quiltmc.org/v3/versions/loader/{minecraft_version}/{loader_version}/profile/json"
             
             # Загружаем профиль Quilt
-            response = requests.get(url, timeout=30)
-            response.raise_for_status()
-            
-            quilt_profile = response.json()
+            response = DownloadService().download_file_sync(url, self.temp_path / f"quilt-loader-{loader_version}-{minecraft_version}.json", progress_callback)
+            if not response:
+                LogService.log('ERROR', f"[BUILD] Не удалось скачать профиль Quilt", stack=traceback.format_exc())
+                return False
+            quilt_profile = json.load(open(self.temp_path / f"quilt-loader-{loader_version}-{minecraft_version}.json", 'r', encoding='utf-8'))
             
             # Сохраняем профиль
             profile_name = f"quilt-loader-{loader_version}-{minecraft_version}"
@@ -541,7 +600,7 @@ class BuildManager:
             
             # Загружаем библиотеки Quilt
             libraries = quilt_profile.get("libraries", [])
-            if not self._download_libraries(libraries, progress_callback):
+            if not self._download_libraries(libraries, progress_callback, log_callback):
                 return False
             
             return True
@@ -550,7 +609,7 @@ class BuildManager:
             return False
     
     def _install_neoforge(self, minecraft_version: str, neoforge_version: str, progress_callback: Optional[Callable] = None, log_callback: Optional[Callable] = None) -> bool:
-        logger.info(f"Установка NeoForge: {minecraft_version} {neoforge_version}")
+        LogService.log('INFO', f"Установка NeoForge: {minecraft_version} {neoforge_version}")
 
         try:
             if log_callback:
@@ -572,7 +631,7 @@ class BuildManager:
             return False
     
     def _install_server_jar(self, minecraft_version: str, server_type: str, build_number: str, progress_callback: Optional[Callable] = None, log_callback: Optional[Callable] = None) -> bool:
-        logger.info(f"Установка серверного JAR: {server_type} {build_number} для {minecraft_version}")
+        LogService.log('INFO', f"Установка серверного JAR: {server_type} {build_number} для {minecraft_version}")
 
         try:
             if log_callback:
@@ -588,12 +647,10 @@ class BuildManager:
             server_jar_path = self.versions_path / f"{server_type.lower()}-{minecraft_version}-{build_number}" / f"{server_type.lower()}-{minecraft_version}-{build_number}.jar"
             server_jar_path.parent.mkdir(parents=True, exist_ok=True)
             try:
-                response = requests.get(url, stream=True, timeout=30)
-                response.raise_for_status()
-                with open(server_jar_path, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
+                response = DownloadService().download_file_sync(url, server_jar_path, progress_callback)
+                if not response:
+                    LogService.log('ERROR', f"[BUILD] Не удалось скачать серверный JAR {server_type} {build_number}", stack=traceback.format_exc())
+                    return False
                 return True
             except Exception as e:
                 return False
@@ -655,7 +712,7 @@ class BuildManager:
         try:
             builds = []
             if not self.instances_path.exists():
-                logger.debug("[BUILD] Папка instances не существует")
+                LogService.log('DEBUG', "[BUILD] Папка instances не существует")
                 return builds
                 
             for instance_dir in self.instances_path.iterdir():
@@ -665,7 +722,7 @@ class BuildManager:
                         
                     config_file = instance_dir / "instance.cfg"
                     if not config_file.exists():
-                        logger.warning(f"[BUILD] Конфигурационный файл не найден: {config_file}")
+                        LogService.log('WARNING', f"[BUILD] Конфигурационный файл не найден: {config_file}")
                         continue
                         
                     # Безопасное чтение конфигурации
@@ -673,12 +730,12 @@ class BuildManager:
                         with open(config_file, 'r', encoding='utf-8') as f:
                             config = json.load(f)
                     except (json.JSONDecodeError, UnicodeDecodeError, IOError) as e:
-                        logger.error(f"[BUILD] Ошибка чтения конфигурации {config_file}: {e}")
+                        LogService.log('ERROR', f"[BUILD] Ошибка чтения конфигурации {config_file}: {e}", stack=traceback.format_exc())
                         continue
                         
                     build_name = config.get("name", instance_dir.name)
                     if not build_name:
-                        logger.warning(f"[BUILD] Пустое имя сборки в {instance_dir}")
+                        LogService.log('WARNING', f"[BUILD] Пустое имя сборки в {instance_dir}")
                         continue
                         
                     state_info = self.get_build_state(build_name)
@@ -695,17 +752,17 @@ class BuildManager:
                         "message": state_info["message"]
                     }
                     builds.append(build_info)
-                    logger.debug(f"[BUILD] Добавлена сборка: {build_name}")
+                    LogService.log('DEBUG', f"[BUILD] Добавлена сборка: {build_name}")
                     
                 except Exception as e:
-                    logger.error(f"[BUILD] Ошибка обработки сборки {instance_dir}: {e}")
+                    LogService.log('ERROR', f"[BUILD] Ошибка обработки сборки {instance_dir}: {e}", stack=traceback.format_exc())
                     continue
                     
-            logger.debug(f"[BUILD] Всего найдено сборок: {len(builds)}")
+            LogService.log('DEBUG', f"[BUILD] Всего найдено сборок: {len(builds)}")
             return builds
             
         except Exception as e:
-            logger.exception("[BUILD] Критическая ошибка при получении списка сборок")
+            LogService.log('ERROR', f"[BUILD] Критическая ошибка при получении списка сборок", stack=traceback.format_exc())
             return []
     
     def delete_build(self, build_name: str) -> bool:
@@ -717,14 +774,14 @@ class BuildManager:
                 shutil.rmtree(instance_dir)
                 # Очищаем состояние сборки
                 self.clear_build_state(build_name)
-                logger.info(f"[BUILD] Сборка удалена: {build_name}")
+                LogService.log('INFO', f"[BUILD] Сборка удалена: {build_name}")
                 return True
             
-            logger.warning(f"[BUILD] Не удалось найти сборку для удаления: {build_name}")
+            LogService.log('WARNING', f"[BUILD] Не удалось найти сборку для удаления: {build_name}")
             return False
             
         except Exception as e:
-            logger.exception(f"[BUILD] Ошибка при удалении сборки {build_name}")
+            LogService.log('ERROR', f"[BUILD] Ошибка при удалении сборки {build_name}", stack=traceback.format_exc())
             return False
     
     def get_build_logs(self, build_name: str) -> List[Dict[str, Any]]:
@@ -787,3 +844,24 @@ class BuildManager:
             
         except Exception as e:
             return False 
+
+    def set_build_state(self, build_name: str, status: BuildStatus, progress: int = 0, message: str = ""):
+        with self._state_lock:
+            self.build_states[build_name] = {
+                "status": status,
+                "progress": progress,
+                "message": message
+            }
+
+    def get_build_state(self, build_name: str) -> dict:
+        with self._state_lock:
+            return self.build_states.get(build_name, {
+                "status": BuildStatus.UNKNOWN,
+                "progress": 0,
+                "message": ""
+            })
+
+    def clear_build_state(self, build_name: str):
+        with self._state_lock:
+            if build_name in self.build_states:
+                del self.build_states[build_name] 

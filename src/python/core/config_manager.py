@@ -39,7 +39,7 @@ class ConfigManager:
             "window_height": 800,
             "auto_update": True,
             "check_servers": True,
-            "download_threads": 4,
+            "download_threads": 16,
             "instances_path": "instances",  # Папка для сборок
             "versions_path": "versions",    # Папка для версий
             "libraries_path": "libraries",  # Папка для библиотек

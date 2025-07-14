@@ -10,11 +10,7 @@ from pathlib import Path
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt, QTranslator, QLocale
 from PySide6.QtGui import QFont
-from loguru import logger
 import logging
-
-# Добавляем вывод в консоль
-# logger.add(sys.stdout, level="DEBUG", colorize=True, format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>")
 
 # Добавляем путь к модулям проекта
 sys.path.append(str(Path(__file__).parent))
@@ -22,6 +18,7 @@ sys.path.append(str(Path(__file__).parent))
 from ui.main_window import MainWindow
 from core.config_manager import ConfigManager
 from utils.theme_manager import ThemeManager
+from services.log_service import LogService
 
 class TMKLLauncher:
     """Главный класс лаунчера TMKL"""
@@ -179,19 +176,18 @@ class TMKLLauncher:
 
 def setup_logging():
     os.makedirs("logs", exist_ok=True)
-    logger.remove()
-    logger.add("logs/launcher.log", rotation="5 MB", retention="10 days", level="DEBUG", encoding="utf-8")
-    logger.add(lambda msg: print(msg, end=""), level="INFO")
-    # Интеграция с стандартным logging
-    class InterceptHandler(logging.Handler):
-        def emit(self, record):
-            # Перенаправляем стандартные логи в loguru
-            logger_opt = logger.opt(depth=6, exception=record.exc_info)
-            logger_opt.log(record.levelname, record.getMessage())
-    logging.basicConfig(handlers=[InterceptHandler()], level=logging.DEBUG)
+    # Настройка стандартного logging
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s | %(levelname)s | %(name)s | %(message)s',
+        handlers=[
+            logging.FileHandler("logs/launcher.log", encoding="utf-8"),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
 
 setup_logging()
-logger.info("Приложение запущено")
+LogService.log('INFO', "Приложение запущено", source="Main")
 
 def main():
     """Точка входа в приложение"""

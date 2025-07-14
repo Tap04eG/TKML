@@ -2,7 +2,6 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QComboBox, 
     QListWidget, QListWidgetItem, QSizePolicy, QDialog, QDialogButtonBox, 
     QMessageBox, QMenu, QTabWidget, QCheckBox, QScrollArea, QFrame, QGridLayout, 
-
     QGraphicsDropShadowEffect, QProgressBar, QButtonGroup, QStackedWidget, QFileDialog, QTextEdit
 )
 from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve, QTimer, QObject, QRectF, Slot, QThread
@@ -11,15 +10,17 @@ import os
 import json
 import urllib.request
 import threading
-from src.python.core.build_manager import BuildManager
+from core.build_manager import BuildManager
 from pathlib import Path
 import shutil
-import requests
 import subprocess
 import platform
 import glob
 import uuid
-from loguru import logger
+
+from services.download_service import DownloadService
+from services.log_service import LogService
+from core.minecraft_runner import MinecraftRunner
 
 # Цвета из CSS
 MC_DARK_GREEN = "#2d6135"
@@ -54,7 +55,7 @@ class VersionCard(QFrame):
         super().__init__(parent)
         try:
             if not version or not isinstance(version, dict):
-                logger.error(f"[UI] Некорректная версия для VersionCard: {version}")
+                LogService.log('ERROR', f"[UI] Некорректная версия для VersionCard: {version}", source="InstallationsTab")
                 version = {"name": "Unknown", "type": "release"}
                 
             self.version = version
@@ -165,7 +166,7 @@ class VersionCard(QFrame):
             self.timer = None
             
         except Exception as e:
-            logger.exception(f"[UI] Ошибка создания VersionCard: {e}")
+            LogService.log('ERROR', f"[UI] Ошибка создания VersionCard: {e}", source="InstallationsTab")
             # Создаем минимальный виджет с ошибкой
             self.version = {"name": "Error", "type": "release"}
             layout = QHBoxLayout(self)
@@ -183,7 +184,7 @@ class VersionCard(QFrame):
             self.anim.setEndValue(rect)
             self.anim.start()
         except Exception as e:
-            logger.error(f"[UI] Ошибка в _on_enter: {e}")
+            LogService.log('ERROR', f"[UI] Ошибка в _on_enter: {e}", source="InstallationsTab")
 
     def _on_leave(self, event):
         try:
@@ -193,7 +194,7 @@ class VersionCard(QFrame):
                 self.anim.setEndValue(self._orig_geom)
                 self.anim.start()
         except Exception as e:
-            logger.error(f"[UI] Ошибка в _on_leave: {e}")
+            LogService.log('ERROR', f"[UI] Ошибка в _on_leave: {e}", source="InstallationsTab")
 
     def start_install(self):
         try:
@@ -208,7 +209,7 @@ class VersionCard(QFrame):
             self.timer.start(30)
             
         except Exception as e:
-            logger.error(f"[UI] Ошибка при запуске установки: {e}")
+            LogService.log('ERROR', f"[UI] Ошибка при запуске установки: {e}", source="InstallationsTab")
 
     def _on_progress(self):
         try:
@@ -226,7 +227,7 @@ class VersionCard(QFrame):
             else:
                 self.progress.setValue(val)
         except Exception as e:
-            logger.error(f"[UI] Ошибка в _on_progress: {e}")
+            LogService.log('ERROR', f"[UI] Ошибка в _on_progress: {e}", source="InstallationsTab")
 
 class InstalledVersionWidget(QWidget):
     remove_requested = Signal(dict)
@@ -335,7 +336,7 @@ class RoundedPanel(QWidget):
             painter.setPen(QPen(self.border_color, self.border_width))
             painter.drawRoundedRect(rect, self.radius, self.radius)
         except Exception as e:
-            logger.error(f"[UI] Ошибка отрисовки RoundedPanel: {e}")
+            LogService.log('ERROR', f"[UI] Ошибка отрисовки RoundedPanel: {e}", source="InstallationsTab")
 
 class BuildWorker(QObject):
     progress = Signal(int, str)
@@ -347,22 +348,39 @@ class BuildWorker(QObject):
         super().__init__()
         self.build_manager = build_manager
         self.build_config = build_config
-        logger.info(f"[WORKER] BuildWorker создан для сборки: {build_config.get('name', 'Unknown')}")
+        self.is_running = False
+        LogService.log('INFO', f"[WORKER] BuildWorker создан для сборки: {build_config.get('name', 'Unknown')}", source="InstallationsTab")
 
     def run(self):
         print('BuildWorker.run called')
+        self.is_running = True
+        
         def progress_callback(value, text):
-            print(f"PROGRESS: {value} {text}")
-            self.progress.emit(value, text)
+            if self.is_running:
+                print(f"PROGRESS: {value} {text}")
+                self.progress.emit(value, text)
+            
         def log_callback(msg):
-            print(f"LOG: {msg}")
-            self.log_msg.emit(msg)
+            if self.is_running:
+                print(f"LOG: {msg}")
+                self.log_msg.emit(msg)
+            
         try:
-            self.build_manager.create_build(self.build_config, progress_callback, log_callback)
-            self.finished.emit()
+            success = self.build_manager.create_build(self.build_config, progress_callback, log_callback)
+            if success:
+                self.finished.emit()
+            else:
+                self.error.emit("Ошибка создания сборки")
         except Exception as e:
             print(f"EXCEPTION in BuildWorker.run: {e}")
+            self.log_msg.emit(f"Критическая ошибка: {e}")
             self.error.emit(str(e))
+        finally:
+            self.is_running = False
+    
+    def stop(self):
+        """Остановка процесса создания сборки"""
+        self.is_running = False
 
 class InstallationsTab(QWidget):
     progress_update = Signal(int, str)
@@ -770,11 +788,11 @@ class InstallationsTab(QWidget):
         try:
             assert threading.current_thread() == threading.main_thread(), "_on_progress_update: UI update not in main thread!"
             
-            logger.debug(f"[UI] Обновление прогресса: {value}% - {text}")
+            LogService.log('DEBUG', f"[UI] Обновление прогресса: {value}% - {text}", source="InstallationsTab")
             
             # Проверяем, что прогресс-бар доступен
             if not hasattr(self, 'progress') or not self.progress:
-                logger.warning("[UI] Прогресс-бар недоступен")
+                LogService.log('WARNING', "[UI] Прогресс-бар недоступен", source="InstallationsTab")
                 return
                 
             # Обновляем прогресс-бар
@@ -790,10 +808,58 @@ class InstallationsTab(QWidget):
                 # status_label может не существовать в этом классе
                         
             except Exception as e:
-                logger.error(f"[UI] Ошибка обновления прогресс-бара: {e}")
+                LogService.log('ERROR', f"[UI] Ошибка обновления прогресс-бара: {e}", source="InstallationsTab")
                 
         except Exception as e:
-            logger.exception(f"[UI] Критическая ошибка в _on_progress_update: {e}")
+            LogService.log('CRITICAL', f"[UI] Критическая ошибка в _on_progress_update: {e}", source="InstallationsTab")
+
+    def _is_library_needed(self, library: dict, current_os: str) -> bool:
+        """
+        Проверяет, нужна ли библиотека для текущей ОС на основе правил
+        """
+        rules = library.get("rules", [])
+        if not rules:
+            return True  # если нет правил - нужна всегда
+            
+        for rule in rules:
+            action = rule.get("action", "allow")
+            os_rule = rule.get("os", {})
+            
+            # Проверяем ОС
+            if "name" in os_rule:
+                rule_os = os_rule["name"]
+                if rule_os == current_os:
+                    # Библиотека для нашей ОС
+                    if action == "allow":
+                        return True
+                    elif action == "disallow":
+                        return False
+                else:
+                    # Библиотека для другой ОС
+                    if action == "allow":
+                        return False
+                    elif action == "disallow":
+                        return True
+                        
+            # Проверяем архитектуру (если указана)
+            if "arch" in os_rule:
+                import platform
+                current_arch = platform.machine().lower()
+                rule_arch = os_rule["arch"]
+                
+                if current_arch == rule_arch:
+                    if action == "allow":
+                        return True
+                    elif action == "disallow":
+                        return False
+                else:
+                    if action == "allow":
+                        return False
+                    elif action == "disallow":
+                        return True
+        
+        # Если правила не сработали - библиотека нужна
+        return True
 
     def update_my_builds(self):
         from pathlib import Path
@@ -844,14 +910,35 @@ class InstallationsTab(QWidget):
                 missing_libs = []
                 if json_path.exists():
                     import json
+                    import platform
                     with open(json_path, encoding="utf-8") as f:
                         version_json = json.load(f)
                     libs_dir = Path(self.build_manager.config_manager.get('minecraft_path')) / "libraries"
+                    
+                    # Определяем текущую ОС
+                    current_os = platform.system().lower()
+                    if current_os == "windows":
+                        current_os = "windows"
+                    elif current_os == "linux":
+                        current_os = "linux" 
+                    elif current_os == "darwin":
+                        current_os = "osx"
+                    else:
+                        current_os = "windows"  # fallback
+                    
                     for lib in version_json.get('libraries', []):
+                        # Проверяем, нужна ли библиотека для текущей ОС
+                        if not self._is_library_needed(lib, current_os):
+                            continue
+                            
                         artifact = lib.get('downloads', {}).get('artifact')
                         if artifact:
                             lib_path = libs_dir / artifact['path']
                             if not lib_path.exists():
+                                # Подробное логирование отсутствующей библиотеки
+                                url = artifact.get('url', 'нет url')
+                                sha1 = artifact.get('sha1', 'нет sha1')
+                                self.append_log(f"[MISSING LIB] Build: {build} | Path: {lib_path} | URL: {url} | SHA1: {sha1}")
                                 missing_libs.append(str(lib_path))
                     if missing_libs:
                         errors.append(f"Нет библиотек: {len(missing_libs)} шт.")
@@ -909,9 +996,14 @@ class InstallationsTab(QWidget):
                 )
                 def launch_selected_build():
                     import shutil
+                    import threading
+                    print("[DEBUG] Играть нажата")
+                    self.append_log("[DEBUG] Играть нажата")
                     build_dir = Path(versions_path) / build
                     json_path = build_dir / f"{build}.json"
                     jar_path = build_dir / f"{build}.jar"
+                    print(f"[DEBUG] build_dir: {build_dir}, json_path: {json_path}, jar_path: {jar_path}")
+                    self.append_log(f"[DEBUG] build_dir: {build_dir}, json_path: {json_path}, jar_path: {jar_path}")
                     # Проверка наличия java
                     java_path_setting = self.build_manager.config_manager.get('java_path', 'auto')
                     java_path = None
@@ -932,38 +1024,64 @@ class InstallationsTab(QWidget):
                                     candidates += glob.glob(os.path.join(pf, 'Java', '*', 'bin', 'javaw.exe'))
                         if candidates:
                             java_path = candidates[0]
+                    print(f"[DEBUG] java_path: {java_path}")
+                    self.append_log(f"[DEBUG] java_path: {java_path}")
                     if java_path:
                         # Сохраняем найденный путь для будущих запусков
                         self.build_manager.config_manager.set('java_path', java_path)
                     if not java_path:
-                        self.append_log('Java не найдена! Установите Java 17+ и добавьте в PATH или настройте путь в настройках.')
+                        self.append_log('[ERROR] Java не найдена! Установите Java 17+ и добавьте в PATH или настройте путь в настройках.')
+                        print('[ERROR] Java не найдена!')
                         return
                     # Проверка jar-файла
                     if not json_path.exists() or not jar_path.exists():
-                        self.append_log(f'Не найден json или jar-файл: {json_path}, {jar_path}')
+                        self.append_log(f'[ERROR] Не найден json или jar-файл: {json_path}, {jar_path}')
+                        print(f'[ERROR] Не найден json или jar-файл: {json_path}, {jar_path}')
                         return
                     try:
                         with open(json_path, encoding="utf-8") as f:
                             version_json = json.load(f)
+                        print("[DEBUG] version_json загружен")
+                        self.append_log("[DEBUG] version_json загружен")
                         # 1. Собираем classpath
                         libraries = []
                         libs_dir = Path(self.build_manager.config_manager.get('minecraft_path')) / "libraries"
+                        # Определяем текущую ОС
+                        current_os = platform.system().lower()
+                        if current_os == "windows":
+                            current_os = "windows"
+                        elif current_os == "linux":
+                            current_os = "linux" 
+                        elif current_os == "darwin":
+                            current_os = "osx"
+                        else:
+                            current_os = "windows"  # fallback
+                        print(f"[DEBUG] current_os: {current_os}")
+                        self.append_log(f"[DEBUG] current_os: {current_os}")
                         for lib in version_json.get("libraries", []):
+                            # Проверяем, нужна ли библиотека для текущей ОС
+                            if not self._is_library_needed(lib, current_os):
+                                continue
                             artifact = lib.get("downloads", {}).get("artifact")
                             if artifact:
                                 lib_path = libs_dir / artifact["path"]
                                 if not lib_path.exists():
-                                    self.append_log(f'Библиотека не найдена: {lib_path}')
+                                    self.append_log(f'[WARNING] Библиотека не найдена: {lib_path}')
+                                    print(f'[WARNING] Библиотека не найдена: {lib_path}')
                                 libraries.append(str(lib_path))
                         classpath = os.pathsep.join(libraries + [str(jar_path)])
+                        print(f"[DEBUG] classpath: {classpath}")
+                        self.append_log(f"[DEBUG] classpath: {classpath}")
                         # 2. Получаем mainClass
                         main_class = version_json.get("mainClass")
+                        print(f"[DEBUG] mainClass: {main_class}")
+                        self.append_log(f"[DEBUG] mainClass: {main_class}")
                         if not main_class:
-                            self.append_log('mainClass не найден в json')
+                            self.append_log('[ERROR] mainClass не найден в json')
+                            print('[ERROR] mainClass не найден в json')
                             return
                         # 3. Формируем переменные для подстановки (ОФФЛАЙН-РЕЖИМ)
                         nick = self.get_nick_func() if callable(self.get_nick_func) else "Player"
-                        # Оффлайн UUID (uuid3 по нику)
                         offline_uuid = str(uuid.uuid3(uuid.NAMESPACE_DNS, str(nick)))
                         args = {
                             "auth_player_name": nick,
@@ -985,7 +1103,6 @@ class InstallationsTab(QWidget):
                             "launcher_version": "1.0",
                             "classpath": classpath,
                         }
-                        # Добавляем все ключи из version_json для безопасной подстановки (например, quickPlayPath)
                         for k, v in version_json.items():
                             if k not in args:
                                 args[k] = v
@@ -1017,12 +1134,14 @@ class InstallationsTab(QWidget):
                                         jvm_args.extend(value)
                                     else:
                                         jvm_args.append(value)
-                        # Безопасная подстановка: если переменной нет — пустая строка
+                        print(f"[DEBUG] jvm_args: {jvm_args}")
+                        self.append_log(f"[DEBUG] jvm_args: {jvm_args}")
                         def safe_format(s):
                             try:
                                 return s.replace('${', '{').format_map(DefaultDictEmpty(args))
                             except Exception as e:
-                                self.append_log(f'Ошибка подстановки аргумента: {e}')
+                                self.append_log(f'[ERROR] Ошибка подстановки аргумента: {e}')
+                                print(f'[ERROR] Ошибка подстановки аргумента: {e}')
                                 return s
                         class DefaultDictEmpty(dict):
                             def __missing__(self, key):
@@ -1049,24 +1168,55 @@ class InstallationsTab(QWidget):
                                         game_args.extend(value)
                                     else:
                                         game_args.append(value)
-                        # Удаляем --demo и связанные параметры, если они есть
                         game_args = [arg for arg in game_args if not (isinstance(arg, str) and arg.strip().startswith("--demo"))]
                         game_args = [safe_format(v) if isinstance(v, str) else v for v in game_args]
-                        # 6. Запуск процесса с выводом stdout/stderr
-                        cmd = [java_path] + jvm_args + [main_class] + game_args
-                        self.append_log(f'Запуск: {' '.join(cmd)}')
-                        proc = subprocess.Popen(cmd, cwd=str(build_dir), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                        out, err = proc.communicate()
-                        if out:
-                            self.append_log(out)
-                        if err:
-                            self.append_log(err)
-                        if proc.returncode == 0:
-                            self.append_log('Minecraft успешно запущен (или завершён без ошибок).')
-                        else:
-                            self.append_log(f'Процесс завершился с ошибкой (код {proc.returncode})')
+                        
+                        # Фильтруем пустые quick play аргументы
+                        filtered_game_args = []
+                        skip_next = False
+                        for i, arg in enumerate(game_args):
+                            if skip_next:
+                                skip_next = False
+                                continue
+                            
+                            if isinstance(arg, str) and arg.startswith("--quickPlay"):
+                                # Проверяем следующий аргумент
+                                if i + 1 < len(game_args) and isinstance(game_args[i + 1], str):
+                                    next_arg = game_args[i + 1]
+                                    # Если следующий аргумент пустой или равен пустой строке, пропускаем оба
+                                    if not next_arg or next_arg.strip() == "":
+                                        skip_next = True
+                                        continue
+                            
+                            filtered_game_args.append(arg)
+                        
+                        game_args = filtered_game_args
+                        print(f"[DEBUG] game_args: {game_args}")
+                        self.append_log(f"[DEBUG] game_args: {game_args}")
+                        # 6. Запуск Minecraft через MinecraftRunner в отдельном потоке
+                        def run_mc():
+                            print("[DEBUG] Запуск MinecraftRunner.run")
+                            self.append_log("[DEBUG] Запуск MinecraftRunner.run")
+                            MinecraftRunner.run(
+                                java_path=java_path,
+                                main_class=main_class,
+                                classpath=classpath,
+                                natives_dir=str(build_dir / "natives"),
+                                game_dir=str(build_dir),
+                                assets_dir=str(Path(self.build_manager.config_manager.get('minecraft_path')) / "assets"),
+                                assets_index=version_json.get("assetIndex", {}).get("id", ""),
+                                username=str(nick),
+                                uuid_=offline_uuid,
+                                width=854,
+                                height=480,
+                                extra_jvm_args=jvm_args,
+                                extra_game_args=game_args,
+                                log_callback=self.append_log
+                            )
+                        threading.Thread(target=run_mc, daemon=True).start()
                     except Exception as e:
-                        self.append_log(f'Ошибка запуска: {e}')
+                        self.append_log(f'[ERROR] Ошибка запуска: {e}')
+                        print(f'[ERROR] Ошибка запуска: {e}')
                 play_btn.clicked.connect(launch_selected_build)
                 btns_hbox.addWidget(play_btn)
                 # Кнопка Настройки
@@ -1110,87 +1260,93 @@ class InstallationsTab(QWidget):
             f.write(text + "\n")
 
     def create_build(self):
-        from pathlib import Path
-        import shutil
-        import os
-        import requests
-        import json
+        from PySide6.QtCore import QThread
+        
         print('create_build (InstallationsTab) called')
         name = self.name_edit.text().strip()
         mc_version = self.version_combo.currentText()
-        print(f'mc_version: {mc_version}')
+        loader = self.loader_combo.currentText()
+        loader_version = self.loader_ver_combo.currentText() if self.loader_ver_combo.isVisible() else ""
+        
+        print(f'mc_version: {mc_version}, loader: {loader}, loader_version: {loader_version}')
+        
         if not name:
             self.append_log('Укажите название сборки!')
             return
         if not mc_version:
             self.append_log('Выберите версию Minecraft!')
             return
-        # Получаем путь к папке версий
-        versions_path = self.build_manager.config_manager.get_versions_path()
-        build_dir = Path(versions_path) / name.replace(' ', '_')
-        try:
-            build_dir.mkdir(parents=True, exist_ok=True)
-            self.append_log(f'Папка сборки создана: {build_dir}')
-            # Копируем картинку, если выбрана
-            if self.selected_image_path:
-                ext = os.path.splitext(self.selected_image_path)[1]
-                img_dst = build_dir / f"{name.replace(' ', '_')}{ext}"
-                shutil.copy2(self.selected_image_path, img_dst)
-                self.append_log(f'Картинка скопирована: {img_dst}')
-            # Скачиваем JSON-файл версии
-            all_versions = self.build_manager.minecraft_manager.get_available_versions()
-            version_info = next((v for v in all_versions if v.get('id') == mc_version), None)
-            print(f'version_info: {version_info}')
-            if not version_info or 'url' not in version_info:
-                self.append_log(f'Не удалось получить ссылку на JSON-файл версии: {mc_version}')
-                print('all_versions:', all_versions)
-                return
-            json_url = version_info['url']
-            json_dst = build_dir / f"{name.replace(' ', '_')}.json"
-            self.append_log(f'Скачивание JSON-файла версии: {json_url} → {json_dst}')
-            resp = requests.get(json_url, timeout=30)
-            resp.raise_for_status()
-            with open(json_dst, 'w', encoding='utf-8') as f:
-                f.write(resp.text)
-            self.append_log(f'JSON-файл успешно загружен: {json_dst}')
-            # Парсим JSON и ищем ссылку на jar
-            version_json = json.loads(resp.text)
-            jar_url = version_json.get('downloads', {}).get('client', {}).get('url')
-            if not jar_url:
-                self.append_log(f'Не найден URL jar-файла в JSON для версии: {mc_version}')
-                return
-            jar_dst = build_dir / f"{name.replace(' ', '_')}.jar"
-            self.append_log(f'Скачивание jar-файла: {jar_url} → {jar_dst}')
-            resp_jar = requests.get(jar_url, stream=True, timeout=30)
-            resp_jar.raise_for_status()
-            with open(jar_dst, 'wb') as f:
-                for chunk in resp_jar.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-            self.append_log(f'jar-файл успешно загружен: {jar_dst}')
-            # Скачиваем библиотеки
-            libs_dir = Path(self.build_manager.config_manager.get('minecraft_path')) / "libraries"
-            for lib in version_json.get('libraries', []):
-                artifact = lib.get('downloads', {}).get('artifact')
-                if artifact:
-                    url = artifact.get('url')
-                    path = libs_dir / artifact['path']
-                    if not path.exists():
-                        path.parent.mkdir(parents=True, exist_ok=True)
-                        try:
-                            r = requests.get(url, timeout=30)
-                            r.raise_for_status()
-                            with open(path, 'wb') as f:
-                                f.write(r.content)
-                            self.append_log(f'Скачана библиотека: {path}')
-                        except Exception as e:
-                            self.append_log(f'Ошибка скачивания {url}: {e}')
-                    else:
-                        self.append_log(f'Библиотека уже есть: {path}')
-        except Exception as e:
-            self.append_log(f'Ошибка: {e}')
-        self.progress.setValue(100)
+            
+        # Создаём конфигурацию сборки
+        build_config = {
+            "name": name,
+            "minecraft_version": mc_version,
+            "loader": loader,
+            "loader_version": loader_version,
+            "notes": ""
+        }
+        
+        # Создаём и запускаем BuildWorker в отдельном потоке
+        self.build_worker = BuildWorker(self.build_manager, build_config)
+        self.build_thread = QThread()
+        self.build_worker.moveToThread(self.build_thread)
+        
+        # Подключаем сигналы
+        self.build_worker.progress.connect(self._on_progress_update)
+        self.build_worker.log_msg.connect(self.append_log)
+        self.build_worker.finished.connect(self._on_build_finished)
+        self.build_worker.error.connect(self._on_build_error)
+        
+        # Подключаем запуск и остановку потока
+        self.build_thread.started.connect(self.build_worker.run)
+        self.build_worker.finished.connect(self.build_thread.quit)
+        self.build_worker.error.connect(self.build_thread.quit)
+        
+        # Очищаем ресурсы после завершения
+        self.build_thread.finished.connect(self.build_worker.deleteLater)
+        self.build_thread.finished.connect(self.build_thread.deleteLater)
+        
+        # Запускаем поток
+        self.build_thread.start()
+        
+        # Показываем прогресс-бар
         self.progress.setVisible(True)
+        self.progress.setValue(0)
+        
+        # Отключаем кнопку создания
+        from PySide6.QtWidgets import QPushButton
+        sender = self.sender()
+        if isinstance(sender, QPushButton):
+            sender.setEnabled(False)
+            sender.setText("Создание сборки...")
+    
+    def _on_build_finished(self):
+        """Обработчик успешного завершения создания сборки"""
+        self.append_log("Сборка создана успешно!")
+        self.progress.setValue(100)
+        self.progress.setVisible(False)
+        
+        # Включаем кнопку создания обратно
+        from PySide6.QtWidgets import QPushButton
+        sender = self.sender()
+        if isinstance(sender, QPushButton):
+            sender.setEnabled(True)
+            sender.setText("Создать сборку")
+        
+        # Обновляем список сборок
+        self.update_my_builds()
+    
+    def _on_build_error(self, error_message):
+        """Обработчик ошибки создания сборки"""
+        self.append_log(f"Ошибка создания сборки: {error_message}")
+        self.progress.setVisible(False)
+        
+        # Включаем кнопку создания обратно
+        from PySide6.QtWidgets import QPushButton
+        sender = self.sender()
+        if isinstance(sender, QPushButton):
+            sender.setEnabled(True)
+            sender.setText("Создать сборку")
 
     def set_active_tab(self, idx):
         for i, btn in enumerate(self.sidebar_btns):

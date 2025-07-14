@@ -9,7 +9,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QPixmap, QColor
 from PySide6.QtCore import Qt, QSize
-import requests
+from services.download_service import DownloadService
+from services.log_service import LogService
 
 MAX_PROFILES = 8
 AVATAR_SIZE = 48
@@ -25,13 +26,15 @@ def get_avatar_pixmap(nick: str, size: int = AVATAR_SIZE) -> QPixmap:
     """Загружает аватарку с minotar.net, если не удалось — возвращает заглушку"""
     url = f"https://minotar.net/avatar/{nick}/{size}"
     try:
-        response = requests.get(url, timeout=3)
-        if response.status_code == 200:
+        # Используем DownloadService для загрузки аватара
+        download_service = DownloadService()
+        response_data = download_service.download_text(url, timeout=3)
+        if response_data:
             pixmap = QPixmap()
-            pixmap.loadFromData(response.content)
+            pixmap.loadFromData(response_data.encode('utf-8') if isinstance(response_data, str) else response_data)
             return pixmap
     except Exception as e:
-        print(f"Не удалось загрузить аватар для {nick}: {e}")
+        LogService.log('WARNING', f"Не удалось загрузить аватар для {nick}: {e}", source="ProfilesTab")
     # Заглушка: просто пустой серый квадрат
     pixmap = QPixmap(size, size)
     pixmap.fill(QColor("lightgray"))
