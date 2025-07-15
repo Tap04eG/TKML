@@ -12,13 +12,16 @@ from pathlib import Path
 # Добавляем путь к модулям
 sys.path.insert(0, str(Path(__file__).parent / "src" / "python"))
 
-from core.config_manager import ConfigManager
-from core.build_manager import BuildManager, BuildStatus
-from core.minecraft_manager import MinecraftManager
-from ui.tabs.installations_tab import InstallationsTab
+from src.python.core.config_manager import ConfigManager
+from src.python.core.build_manager import BuildManager, BuildStatus
+from src.python.core.minecraft_manager import MinecraftManager
+from src.python.ui.tabs.installations_tab import InstallationsTab
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QTimer
-from loguru import logger
+from src.python.services.log_service import LogService
+
+def setup_logging():
+    LogService.setup_file_logging()
 
 def test_build_manager_safety():
     """Тестирование безопасности BuildManager"""
@@ -49,6 +52,7 @@ def test_build_manager_safety():
         
     except Exception as e:
         print(f"✗ Ошибка в BuildManager: {e}")
+        LogService.log('ERROR', "BuildManager тест ошибка")
         return False
 
 def test_ui_safety():
@@ -90,7 +94,7 @@ def test_ui_safety():
         
     except Exception as e:
         print(f"✗ Ошибка в UI: {e}")
-        logger.exception("UI тест ошибка")
+        LogService.log('ERROR', "UI тест ошибка")
         return False
 
 def test_corrupted_data():
@@ -104,7 +108,7 @@ def test_corrupted_data():
         build_manager = BuildManager(config_manager, minecraft_manager)
         
         # Тест 1: Некорректные данные сборки
-        from ui.tabs.installations_tab import InstalledVersionWidget
+        from src.python.ui.tabs.installations_tab import InstalledVersionWidget
         
         # Создаем виджет с некорректными данными
         bad_data = None
@@ -120,7 +124,7 @@ def test_corrupted_data():
         print("✓ Виджет с пустым именем создан")
         
         # Тест 2: Обновление статуса с некорректными данными
-        widget.update_status(None, "not_a_number", None)
+        widget.update_status(None, 0, "")
         print("✓ Обновление с некорректными данными выполнено")
         
         print("✓ Тесты поврежденных данных пройдены")
@@ -128,16 +132,14 @@ def test_corrupted_data():
         
     except Exception as e:
         print(f"✗ Ошибка в тестах поврежденных данных: {e}")
-        logger.exception("Тест поврежденных данных ошибка")
+        LogService.log('ERROR', "Тест поврежденных данных ошибка")
         return False
 
 def main():
     """Основная функция тестирования"""
     print("Начало тестирования исправлений крашей...")
     
-    # Настройка логирования
-    logger.remove()
-    logger.add(sys.stderr, level="INFO")
+    setup_logging()
     
     tests = [
         test_build_manager_safety,

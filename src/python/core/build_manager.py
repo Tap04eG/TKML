@@ -257,6 +257,10 @@ class BuildManager:
                 LogService.log('ERROR', f"[download_mc_error] filename={version}.jar dst={client_path} src={client_url} msg={e}")
                 return False
             LogService.log('INFO', f"[BuildManager] Версия Minecraft {version} успешно загружена")
+
+            # Скачиваем ассеты (assetIndex и объекты)
+            self._download_assets(version_info, progress_callback)
+
             return True
         except Exception as e:
             LogService.log('ERROR', f"[BuildManager] Ошибка загрузки версии Minecraft {version}: {e}", stack=traceback.format_exc())
@@ -466,8 +470,29 @@ class BuildManager:
                 if not response:
                     LogService.log('ERROR', f"[BUILD] Не удалось скачать ассет индекс {id_}", stack=traceback.format_exc())
                     return False
+                # --- СКАЧИВАНИЕ САМИХ АССЕТОВ ---
+                import json
+                with open(asset_path, "r", encoding="utf-8") as f:
+                    index_data = json.load(f)
+                objects = index_data.get("objects", {})
+                files_to_download = []
+                for obj_name, obj_info in objects.items():
+                    hash_ = obj_info.get("hash")
+                    if not hash_ or len(hash_) < 2:
+                        continue
+                    url = f"https://resources.download.minecraft.net/{hash_[:2]}/{hash_}"
+                    dest = self.assets_path / "objects" / hash_[:2] / hash_
+                    files_to_download.append((url, dest))
+                if files_to_download:
+                    LogService.log('INFO', f"[BUILD] Начинаю скачивание {len(files_to_download)} ассетов")
+                    def asset_progress_wrapper(current, total, message):
+                        if progress_callback:
+                            percent = int((current / total) * 100)
+                            progress_callback(percent, message)
+                    DownloadService().download_multiple_files(files_to_download, asset_progress_wrapper)
                 return True
             except Exception as e:
+                LogService.log('ERROR', f"[BUILD] Ошибка при скачивании ассетов: {e}", stack=traceback.format_exc())
                 return False
         except Exception as e:
             return False

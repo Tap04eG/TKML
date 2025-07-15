@@ -28,7 +28,7 @@ class DownloadService:
         self.cache = CacheService(config_manager)
         self.config_manager = config_manager
         # Получаем количество потоков из конфига
-        self.max_workers = getattr(config_manager, 'config', {}).get('download_threads', 4) if config_manager else 4
+        self.max_workers = getattr(config_manager, 'config', {}).get('download_threads', 8) if config_manager else 8
 
     def download_file_sync(self, url: str, dest: Path, progress_callback: Optional[Callable[[int, str], None]] = None, use_cache: bool = True) -> bool:
         key = url

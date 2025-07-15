@@ -11,6 +11,8 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt, QTranslator, QLocale
 from PySide6.QtGui import QFont
 import logging
+import shutil
+from datetime import datetime
 
 # Добавляем путь к модулям проекта
 sys.path.append(str(Path(__file__).parent))
@@ -132,11 +134,11 @@ class TMKLLauncher:
         self.theme_manager = ThemeManager(self.config_manager)
         
     def setup_translations(self):
-        """Настройка переводов (пока только русский)"""
+        """Настройка переводов (пока только ru)"""
         translator = QTranslator()
         locale = QLocale.system().name()
         
-        # Пока используем английский, позже добавим русский
+        # Пока используем ru, позже добавим en
         # translator.load(f"translations/tmkl_{locale}")
         # self.app.installTranslator(translator)
         
@@ -176,15 +178,24 @@ class TMKLLauncher:
 
 def setup_logging():
     os.makedirs("logs", exist_ok=True)
-    # Настройка стандартного logging
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s | %(levelname)s | %(name)s | %(message)s',
-        handlers=[
-            logging.FileHandler("logs/launcher.log", encoding="utf-8"),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
+    LogService.setup_file_logging(log_dir="logs", log_filename="launcher.log")
+    LogService.setup_stdout_logging()
+
+# --- Архивация логов ---
+def archive_logs():
+    logs_dir = Path("logs")
+    old_dir = logs_dir / "old"
+    now = datetime.now()
+    date_str = now.strftime("%d-%m-%y")
+    time_str = now.strftime("%H-%M-%S")
+    archive_path = old_dir / date_str / time_str
+    archive_path.mkdir(parents=True, exist_ok=True)
+    for log_file in logs_dir.glob("*.log"):
+        shutil.move(str(log_file), archive_path / log_file.name)
+    for jsonl_file in logs_dir.glob("*.jsonl"):
+        shutil.move(str(jsonl_file), archive_path / jsonl_file.name)
+
+archive_logs()
 
 setup_logging()
 LogService.log('INFO', "Приложение запущено", source="Main")
@@ -195,8 +206,6 @@ def main():
     sys.exit(launcher.run())
 
 def excepthook(type, value, tb):
-    from loguru import logger
-    logger.exception("Uncaught exception", exc_info=(type, value, tb))
     sys.__excepthook__(type, value, tb)
 sys.excepthook = excepthook
 
