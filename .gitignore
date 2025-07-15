@@ -1,0 +1,22 @@
+# Виртуальное окружение
+.venv/
+
+# Кэш Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Логи
+logs/
+
+# Кэш приложения
+.tmkl/
+
+# Файлы среды разработки
+.idea/
+.vscode/
+
+# Системные файлы
+Thumbs.db
+.DS_Store 
